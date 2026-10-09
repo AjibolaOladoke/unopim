@@ -1,0 +1,103 @@
+<?php
+
+namespace Webkul\Product\Filter\ElasticSearch;
+
+use Webkul\Attribute\Models\Attribute;
+use Webkul\ElasticSearch\Enums\FilterOperators;
+
+/**
+ * Option filter for an Elasticsearch query
+ */
+class OptionFilter extends AbstractElasticSearchAttributeFilter
+{
+    public function __construct(
+        array $supportedAttributeTypes = [Attribute::CHECKBOX_FIELD_TYPE, Attribute::MULTISELECT_FIELD_TYPE, Attribute::SELECT_FIELD_TYPE],
+        array $allowedOperators = [
+            FilterOperators::IN,
+            FilterOperators::NOT_IN,
+            FilterOperators::IS_EMPTY,
+            FilterOperators::IS_NOT_EMPTY,
+        ]
+    ) {
+        $this->supportedAttributeTypes = $supportedAttributeTypes;
+        $this->allowedOperators = $allowedOperators;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function addAttributeFilter(
+        $attribute,
+        $operator,
+        $value,
+        ?string $locale = null,
+        ?string $channel = null,
+        $options = []
+    ): static {
+        throw_if($this->queryBuilder === null, \LogicException::class, 'The search query builder is not initialized in the filter.');
+
+        $attributePath = $this->getScopedAttributePath($attribute, $locale, $channel);
+
+        switch ($operator) {
+            case FilterOperators::IN:
+                if ($attribute->type == Attribute::SELECT_FIELD_TYPE) {
+                    /**
+                     * For select fields, use terms query for exact matching
+                     * which is more efficient than query_string.
+                     */
+                    $clause = [
+                        'terms' => [
+                            $attributePath => $value,
+                        ],
+                    ];
+                } else {
+                    /**
+                     * For multiselect/checkbox, use individual wildcard clauses
+                     * with rewrite capping instead of query_string with leading
+                     * wildcards to avoid exceeding maxClauseCount.
+                     */
+                    $clauses = [];
+
+                    foreach ($value as $val) {
+                        $clauses[] = [
+                            'wildcard' => [
+                                $attributePath => [
+                                    'value'   => '*'.$val.'*',
+                                    'rewrite' => 'top_terms_1024',
+                                ],
+                            ],
+                        ];
+                    }
+
+                    $clause = [
+                        'bool' => [
+                            'should'               => $clauses,
+                            'minimum_should_match' => 1,
+                        ],
+                    ];
+                }
+
+                $this->queryBuilder->where($clause);
+                break;
+
+            case FilterOperators::NOT_IN:
+                $this->queryBuilder->whereNot([
+                    'terms' => [$attributePath => (array) $value],
+                ]);
+
+                break;
+
+            case FilterOperators::IS_EMPTY:
+                $this->queryBuilder->whereNot(['exists' => ['field' => $attributePath]]);
+
+                break;
+
+            case FilterOperators::IS_NOT_EMPTY:
+                $this->queryBuilder->where(['exists' => ['field' => $attributePath]]);
+
+                break;
+        }
+
+        return $this;
+    }
+}

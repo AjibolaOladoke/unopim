@@ -1,0 +1,423 @@
+<x-admin::layouts>
+    <x-slot:title>
+        @lang('admin::app.configuration.prompt.index.title')
+    </x-slot>
+    <v-create-prompt-form>
+        <x-admin::page-header :title="trans('admin::app.configuration.prompt.index.title')">
+            <x-slot:actions>
+                <button
+                    type="button"
+                    class="primary-button"
+                >
+                    @lang('admin::app.configuration.prompt.create.create-btn')
+                </button>
+            </x-slot>
+        </x-admin::page-header>
+        <!-- DataGrid Shimmer -->
+        <x-admin::shimmer.datagrid />
+    </v-create-prompt-form>
+    @pushOnce('scripts')
+        <script type="text/x-template" id="v-create-prompt-form-template">
+            <x-admin::page-header :title="trans('admin::app.configuration.prompt.index.title')">
+                <x-slot:actions>
+                    <button
+                        type="button"
+                        class="primary-button"
+                        @click="selectedPrompt=0;resetForm();$refs.promptUpdateOrCreateModal.toggle();toggleMagicAIModal()"
+                    >
+                        @lang('admin::app.configuration.prompt.create.create-btn')
+                    </button>
+                </x-slot>
+            </x-admin::page-header>
+            <x-admin::datagrid src="{{ route('admin.magic_ai.prompt.index') }}" ref="datagrid">
+
+                <template #body="{ columns, records, performAction, handleRowClick, applied, setCurrentSelectionMode }">
+                    <div
+                        v-for="record in records"
+                        :key="record.id"
+                        class="row grid gap-2.5 items-center px-4 py-4 border-b dark:border-cherry-800 text-gray-600 dark:text-gray-300 transition-all"
+                        :class="{'cursor-pointer hover:bg-primary-50 hover:bg-opacity-30 dark:hover:bg-cherry-800': record.actions.some(action => action.index === 'edit')}"
+                        :style="`grid-template-columns: repeat(${gridsCount}, minmax(0, 1fr))`"
+                        @click="handleRowClick($event, record)"
+                    >
+                        <!-- Title -->
+                        <p v-text="record.title" class="truncate" :title="record.title"></p>
+
+                        <!-- Prompt -->
+                        <p v-text="record.prompt" class="truncate" :title="record.prompt"></p>
+
+                        <p v-html="record.type"></p>
+
+                        <p v-html="record.purpose"></p>
+
+                        <p v-html="record.created_at"></p>
+                        <p v-html="record.updated_at"></p>
+
+                        <!-- Actions -->
+                        <div class="flex justify-end" @click.stop>
+                            <a
+                                v-if="record.actions.find(action => action.index === 'edit')"
+                                @click="selectedPrompt=1;editModal(record.actions.find(action => action.index === 'edit')?.url)"
+                            >
+                                <span
+                                    :class="record.actions.find(action => action.index === 'edit')?.icon"
+                                    title="@lang('admin::app.configuration.prompt.datagrid.edit')"
+                                    class="cursor-pointer rounded-md p-1.5 text-2xl transition-all hover:bg-primary-100 dark:hover:bg-gray-800 max-sm:place-self-center"
+                                >
+                                </span>
+                            </a>
+                            <a
+                                v-if="record.actions.find(action => action.index === 'delete')"
+                                @click="performAction(record.actions.find(action => action.index === 'delete'))"
+                            >
+                                <span
+                                    :class="record.actions.find(action => action.index === 'delete')?.icon"
+                                    title="@lang('admin::app.configuration.prompt.datagrid.delete')"
+                                    class="cursor-pointer rounded-md p-1.5 text-2xl transition-all hover:bg-primary-100 dark:hover:bg-gray-800 max-sm:place-self-center"
+                                >
+                                </span>
+                            </a>
+                        </div>
+                    </div>
+                </template>
+            </x-admin::datagrid>
+            <div>
+                <x-admin::form
+                    v-slot="{ meta, errors, handleSubmit }"
+                    as="div"
+                    ref="modalform"
+                >
+                    <form @submit="handleSubmit($event, updateOrCreate)" ref="promptCreateForm">
+                        <!-- prompt Create Modal -->
+                        <x-admin::modal ref="promptUpdateOrCreateModal">
+                            <!-- Modal Header -->
+                            <x-slot:header>
+                                <span v-if="selectedPrompt" class="dark:text-slate-50">
+                                     @lang('admin::app.configuration.prompt.create.edit-title')
+                                </span>
+
+                                <span v-else class="dark:text-slate-50">
+                                     @lang('admin::app.configuration.prompt.create.create-title')
+                                </span>
+                            </x-slot>
+                            <!-- Modal Content -->
+                            <x-slot:content>
+                                <x-admin::form.control-group.control
+                                    type="hidden"
+                                    name="id"
+                                    v-model="id"
+                                />
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.prompt.create.label-title')
+                                    </x-admin::form.control-group.label>
+                                    <x-admin::form.control-group.control
+                                        type="text"
+                                        name="title"
+                                        v-model="title"
+                                        rules="required"
+                                    />
+                                    <x-admin::form.control-group.error control-name="title" />
+                                </x-admin::form.control-group>
+
+                                <!-- Purpose (Action) -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.prompt.create.purpose')
+                                    </x-admin::form.control-group.label>
+
+                                    @php
+                                        $purposeOptions = json_encode([
+                                            ['id' => 'text_generation', 'label' => trans('admin::app.configuration.prompt.create.text-generation')],
+                                            ['id' => 'image_generation', 'label' => trans('admin::app.configuration.prompt.create.image-generation')],
+                                        ]);
+                                    @endphp
+
+                                    <x-admin::form.control-group.control
+                                        type="select"
+                                        id="purpose"
+                                        name="purpose"
+                                        ::value="purpose"
+                                        :options="$purposeOptions"
+                                        :label="trans('admin::app.configuration.prompt.create.purpose')"
+                                        :placeholder="trans('admin::app.configuration.prompt.create.select-purpose')"
+                                        track-by="id"
+                                        label-by="label"
+                                        @input="setPurpose"
+                                    />
+                                    <x-admin::form.control-group.error control-name="purpose" />
+                                </x-admin::form.control-group>
+
+                                <!-- Entity Type (Product/Category) -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                    @lang('admin::app.configuration.prompt.create.type')
+                                    </x-admin::form.control-group.label>
+
+                                    @php
+                                        $supportedTypes = ['product', 'category'];
+                                        $options = [];
+                                        foreach($supportedTypes as $type) {
+                                            $options[] = [
+                                                'id'    => $type,
+                                                'label' => ucfirst($type)
+                                            ];
+                                        }
+                                        $optionsInJson = json_encode($options);
+                                    @endphp
+
+                                    <x-admin::form.control-group.control
+                                        type="select"
+                                        id="type"
+                                        name="type"
+                                        v-model="type"
+                                        rules="required"
+                                        :options="$optionsInJson"
+                                        :value="old('type') ?? $supportedTypes[0]"
+                                        track-by="id"
+                                        label-by="label"
+                                        @input="checkType($event)"
+                                    >
+                                    </x-admin::form.control-group.control>
+
+                                    <x-admin::form.control-group.error control-name="type" />
+                                </x-admin::form.control-group>
+
+
+                                 <!-- Tone Input -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.system-prompt.datagrid.tone')
+                                    </x-admin::form.control-group.label>
+
+                                    @php
+                                        $promptOptions = app(\Webkul\MagicAI\Repository\MagicAISystemPromptRepository::class)->getAllPromptOptions();
+                                        $options = [];
+                                        $defaultPrompt = null;
+
+                                        foreach ($promptOptions as $prompt) {
+                                            $options[] = [
+                                                'id'    => $prompt['id'],
+                                                'label' => $prompt['label'],
+                                            ];
+                                            if ($defaultPrompt === null && $prompt['is_enabled']) {
+                                                $defaultPrompt = $prompt['id'];
+                                            }
+                                        }
+                                        
+                                        if ($defaultPrompt === null && count($options)) {
+                                            $defaultPrompt = $options[0]['id'];
+                                        }
+
+                                        $optionsJson = json_encode($options);
+                                    @endphp
+
+                   
+                                    <x-admin::form.control-group.control
+                                        type="select"
+                                        id="tone"
+                                        name="tone"
+                                        rules="required"
+                                        :options="$optionsJson"   
+                                        v-model="tone"
+                                        track-by="id"
+                                        label-by="label"
+                                    >
+                                    </x-admin::form.control-group.control>
+                                    <x-admin::form.control-group.error control-name="tone" />
+                                </x-admin::form.control-group>
+
+
+                                <!--Prompt Input -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.prompt.create.prompt')
+                                    </x-admin::form.control-group.label>
+                                    <div class="relative w-full">
+                                        <x-admin::form.control-group.control
+                                            type="textarea"
+                                            class="h-[180px]"
+                                            name="prompt"
+                                            rules="required"
+                                            v-model="ai.prompt"
+                                            ref="promptInput"
+                                            :label="trans('admin::app.components.tinymce.ai-generation.prompt')"
+                                        />
+                                        <div
+                                            class="absolute bottom-2.5 left-1 text-gray-400 cursor-pointer text-2xl"
+                                            @click="openSuggestions"
+                                        >
+                                            <span class="icon-at"></span>
+                                        </div>
+                                    </div>
+                                    <x-admin::form.control-group.error control-name="prompt" />
+                                </x-admin::form.control-group>
+                            </x-slot>
+
+                            <!-- Modal Footer -->
+                            <x-slot:footer>
+                                <!-- Modal Submission -->
+                                <div class="flex gap-x-2.5 items-center">
+                                    <button
+                                        type="submit"
+                                        class="primary-button"
+                                    >
+                                    @lang('admin::app.configuration.prompt.create.save-btn')
+                                    </button>
+                                </div>
+                            </x-slot>
+                        </x-admin::modal>
+                    </form>
+                </x-admin::form>
+            </div>
+        </script>
+
+        <script type="module">
+            app.component('v-create-prompt-form', {
+                template: '#v-create-prompt-form-template',
+                data() {
+                    return {
+                        attributes: [],
+                        ai: {
+                            prompt: '',
+                        },
+                        selectedPrompt: 0,
+                        title: null,
+                        type: null,
+                        purpose: 'text_generation',
+                        id: null,
+                        entityName: null,
+                        tone: @json($defaultPrompt),
+                    };
+                },
+
+                computed: {
+                    gridsCount() {
+                        let count = this.$refs.datagrid.available.columns.length;
+
+                        if (this.$refs.datagrid.available.actions.length) {
+                            ++count;
+                        }
+
+                        return count;
+                    },
+                },
+
+                methods: {
+                    setPurpose(value) {
+                        try {
+                            this.purpose = value ? JSON.parse(value).id : 'text_generation';
+                        } catch (error) {
+                            this.purpose = 'text_generation';
+                        }
+                    },
+
+                    checkType(value) {
+                        let selectedField = JSON.parse(value).id;
+                        if (selectedField == 'category') {
+                            this.entityName = 'category_field';
+                        } else {
+                            this.entityName = null;
+                        }
+                    },
+
+                    updateOrCreate(params, {
+                        resetForm,
+                        setErrors
+                    }) {
+                        let formData = new FormData(this.$refs.promptCreateForm);
+
+
+                        if (params.id) {
+                            formData.append('_method', 'put');
+                        }
+
+                        this.$axios.post(params.id ? "{{ route('admin.magic_ai.prompt.update') }}" :
+                                "{{ route('admin.magic_ai.prompt.store') }}", formData)
+                            .then((response) => {
+                                this.$refs.promptUpdateOrCreateModal.close();
+
+                                this.$emitter.emit('add-flash', {
+                                    type: 'success',
+                                    message: response.data.message
+                                });
+
+                                this.$refs.datagrid.get();
+
+                                resetForm();
+                            })
+                            .catch(error => {
+                                if (error.response.status == 422) {
+                                    setErrors(error.response.data.errors);
+                                }
+                            });
+                    },
+
+                    toggleMagicAIModal() {
+                        this.$nextTick(() => {
+                            if (this.$refs.promptInput) {
+
+                                const tribute = this.$tribute.init({
+                                    values: this.fetchSuggestionValues,
+                                    lookup: 'name',
+                                    fillAttr: 'code',
+                                    noMatchTemplate: "@lang('admin::app.common.no-match-found')",
+                                    selectTemplate: (item) => `@${item.original.code}`,
+                                    menuItemTemplate: (item) => {
+                                        const element = document.createElement('div');
+                                        element.className = 'p-1.5 rounded-md text-base cursor-pointer transition-all max-sm:place-self-center';
+                                        element.textContent = item.original.name || '[' + item.original.code + ']';
+
+                                        return element.outerHTML;
+                                    },
+                                });
+                                tribute.attach(this.$refs.promptInput);
+
+                            }
+                        });
+                    },
+
+                    openSuggestions() {
+                        this.ai.prompt += ' @';
+                        this.$nextTick(() => {
+                            this.$refs.promptInput.focus();
+                            const textarea = this.$refs.promptInput;
+                            const keydownEvent = new KeyboardEvent("keydown", {
+                                key: "@",
+                                bubbles: true
+                            });
+                            textarea.dispatchEvent(keydownEvent);
+                            const event = new KeyboardEvent("keyup", {
+                                key: "@",
+                                bubbles: true
+                            });
+                            textarea.dispatchEvent(event);
+                        });
+                    },
+                    async fetchSuggestionValues(text, cb) {
+                        const response = await fetch(
+                            `{{ route('admin.magic_ai.suggestion_values') }}?query=${encodeURIComponent(text)}&entity_name=${encodeURIComponent(this.entityName)}&locale={{ core()->getRequestedLocaleCode() }}`
+                        );
+                        const data = await response.json();
+                        this.suggestionValues = data;
+                        cb(this.suggestionValues);
+                    },
+
+                    editModal(url) {
+                        this.$navigate(url);
+                    },
+
+                    resetForm() {
+                        this.title = null;
+                        this.type = "product";
+                        this.purpose = "text_generation";
+                        this.ai.prompt = '';
+                        this.id = null;
+                        this.entityName = null;
+                        this.tone = @json($defaultPrompt);
+                    }
+                }
+            });
+        </script>
+    @endPushOnce
+</x-admin::layouts>

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+    bootstrap="tests/bootstrap.php"
+    colors="true"
+    cacheDirectory=".phpunit.cache"
+    executionOrder="depends,defects"
+    failOnRisky="true"
+    failOnWarning="true"
+>
+    <testsuites>
+
+        <testsuite name="Api Feature Test">
+            <directory suffix="Test.php">packages/Webkul/AdminApi/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="Core Unit Test">
+            <directory suffix="Test.php">packages/Webkul/Core/tests/Unit</directory>
+        </testsuite>
+
+        <testsuite name="DataTransfer Unit Test">
+            <directory suffix="Test.php">packages/Webkul/DataTransfer/tests/Unit</directory>
+        </testsuite>
+
+        <testsuite name="User Feature Test">
+            <directory suffix="Test.php">packages/Webkul/User/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="Admin Feature Test">
+            <directory suffix="Test.php">packages/Webkul/Admin/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="Installer Feature Test">
+            <directory suffix="Test.php">packages/Webkul/Installer/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="ElasticSearch Feature Test">
+            <directory suffix="Test.php">packages/Webkul/ElasticSearch/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="Completeness Feature Test">
+            <directory suffix="Test.php">packages/Webkul/Completeness/tests/Feature</directory>
+        </testsuite>
+
+        <testsuite name="Product Unit Test">
+            <directory suffix="Test.php">packages/Webkul/Product/tests/Unit</directory>
+        </testsuite>
+
+        <testsuite name="Attribute Unit Test">
+            <directory suffix="Test.php">packages/Webkul/Attribute/tests/Unit</directory>
+        </testsuite>
+
+        <testsuite name="Category Unit Test">
+            <directory suffix="Test.php">packages/Webkul/Category/tests/Unit</directory>
+        </testsuite>
+
+        <testsuite name="Measurement Feature Test">
+            <directory suffix="Test.php">packages/Webkul/Measurement/tests/Feature</directory>
+        </testsuite>
+
+    </testsuites>
+
+    <source>
+        <include>
+            <directory suffix=".php">app</directory>
+            <directory suffix=".php">packages</directory>
+        </include>
+    </source>
+
+    <php>
+        <env name="APP_ENV" value="testing" force="true"/>
+        <env name="APP_DEBUG" value="true" force="true"/>
+
+        <env name="DB_CONNECTION" value="pgsql" force="true"/>
+        <env name="DB_HOST" value="127.0.0.1" force="true"/>
+        <env name="DB_PORT" value="5433" force="true"/>
+        <env name="DB_DATABASE" value="unopim" force="true"/>
+        <env name="DB_USERNAME" value="unopim" force="true"/>
+        <env name="DB_PASSWORD" value="unopim" force="true"/>
+
+        <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="CACHE_DRIVER" value="array" force="true"/>
+        <env name="CACHE_STORE" value="array" force="true"/>
+        <env name="MAIL_MAILER" value="array" force="true"/>
+        <env name="QUEUE_CONNECTION" value="sync" force="true"/>
+        <env name="SESSION_DRIVER" value="array" force="true"/>
+        <env name="BROADCAST_CONNECTION" value="null" force="true"/>
+
+        <env name="TELESCOPE_ENABLED" value="false"/>
+        <env name="ELASTICSEARCH_ENABLED" value="false"/>
+    </php>
+</phpunit>

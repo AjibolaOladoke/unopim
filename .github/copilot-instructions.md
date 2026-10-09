@@ -1,0 +1,174 @@
+# GitHub Copilot Workspace Instructions: Unopim Connector Development
+
+This workspace contains agent skills for building **Unopim third-party connector
+modules**. Unopim is a Webkul Laravel 12 PIM — it is NOT Bagisto.
+
+---
+
+## Framework
+
+- **Platform:** Unopim (not Bagisto, not Magento, not Akeneo)
+- **Language:** PHP 8.3+ / Laravel 12
+- **Module base:** `packages/Webkul/{ModuleName}/src/`
+- **Reference:** `packages/Webkul/WooCommerce/` is the ground-truth connector
+
+---
+
+## Non-negotiable Conventions
+
+### 1. Table names and DB connection prefix
+When a database connection `prefix` is configured (for example `wk_`), Query Builder/Eloquent applies it automatically; hardcoding `wk_` in table names can cause double-prefixing.
+```php
+// Correct
+protected $table = 'woocommerce_credentials';
+DB::table('shopify_products')
+
+// Wrong
+protected $table = 'wk_woocommerce_credentials';
+```
+This matches the reference connectors (`packages/Webkul/Core/src/Models/Channel.php` uses `channels`, `CoreConfig.php` uses `core_config`) and is the convention enforced by `AGENTS.md`.
+
+### 2. Migration folder: `Database/Migration/` (no 's')
+```
+Database/Migration/2025_01_01_000000_module_credentials.php
+```
+```
+
+### 3. ServiceProvider: routes via `Route::middleware('web')->group()`
+```php
+// Correct
+Route::middleware('web')->group(__DIR__ . '/../../Routes/module-routes.php');
+
+// Wrong
+$this->loadRoutesFrom(__DIR__ . '/../../Routes/module-routes.php');
+```
+
+### 4. Layout event name includes `.before`
+```php
+Event::listen('unopim.admin.layout.head.before', ...);
+// NOT: 'unopim.admin.layout.head'
+```
+
+### 5. ModuleServiceProvider extends CoreModuleServiceProvider
+```php
+class ModuleServiceProvider extends CoreModuleServiceProvider
+{
+    protected $models = [\Webkul\WooCommerce\Models\Credential::class];
+}
+```
+
+### 6. Models use HistoryTrait (not optional)
+```php
+use Webkul\HistoryControl\Traits\HistoryTrait;
+use Webkul\HistoryControl\Interfaces\PresentableHistoryInterface;
+
+class Credential extends Model implements PresentableHistoryInterface
+{
+    use HistoryTrait;
+    protected $auditExclude = ['apiSecret'];  // exclude sensitive fields
+    protected $casts = ['extras' => 'array']; // flexible JSON column
+}
+```
+
+### 7. HTTP client uses cURL (not Guzzle)
+```php
+// Correct — cURL
+$ch = curl_init($url);
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, ...]);
+$response = curl_exec($ch);
+curl_close($ch);
+```
+
+### 8. Controller responses for mutations
+```php
+// store/update/delete return JsonResponse with redirect_url
+return new JsonResponse([
+    'redirect_url' => route('module.credentials.index'),
+    'message' => 'Created successfully.',
+]);
+```
+
+### 9. ACL is a flat array
+```php
+return [
+    ['key' => 'module', 'name' => '...', 'route' => '...', 'sort' => 1],
+    ['key' => 'module.credentials', ...],
+    // NO nested children
+];
+```
+
+### 10. Exporter filter fields need 4 required keys
+```php
+[
+    'name'       => 'credential',
+    'type'       => 'select',
+    'async'      => true,
+    'track_by'   => 'id',
+    'label_by'   => 'label',
+    'list_route' => 'module.credentials.get',
+]
+```
+
+### 11. DataGrid in subdirectory with PHPDoc return types
+```php
+// File: src/DataGrids/Credential/CredentialDataGrid.php
+class CredentialDataGrid extends DataGrid
+{
+    /**
+     * @return \Illuminate\Database\Query\Builder
+     */
+    public function prepareQueryBuilder()     // no PHP return type hint
+    {
+        return DB::table('module_credentials')->select(...);
+    }
+
+    public function prepareColumns()
+    {
+        $this->addColumn([
+            'index'   => 'status',
+            'closure' => fn ($row) => $row->status    // arrow function OK
+                ? '<span class="label-active">Yes</span>'
+                : '<span class="label-info text-gray-600 dark:text-gray-300">No</span>',
+        ]);
+    }
+
+    public function prepareActions()
+    {
+        $this->addAction([
+            'url' => function ($row) {            // regular function for url
+                return route('module.credentials.edit', $row->id);
+            },
+        ]);
+    }
+}
+```
+
+---
+
+## Skills Reference
+
+UnoPim AI development skills live in a dedicated repository:
+[unopim/agent-skills](https://github.com/unopim/agent-skills).
+
+Install them locally for your coding agent (Claude Code, Cursor, Copilot, Codex, and more):
+
+```bash
+npx skills add unopim/agent-skills
+```
+
+Laravel Boost is already a dev dependency — set it up with:
+
+```bash
+php artisan boost:install   # one-time setup (MCP server + AI guidelines)
+php artisan boost:update    # refresh guidelines & skills to latest
+```
+
+---
+
+## Code Style
+
+- PSR-12 formatting
+- PHPDoc on all public methods
+- No hardcoded UI strings — use lang files
+- Sensitive API credentials belong in `$auditExclude`, never in `Crypt::encryptString`
+- Permission guard: `bouncer()->hasPermission('module.resource.action')`

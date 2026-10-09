@@ -1,0 +1,224 @@
+<?php
+
+namespace Webkul\AdminApi\Http\Controllers\API\Catalog;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Event;
+use Symfony\Component\HttpFoundation\Response;
+use Webkul\AdminApi\ApiDataSource\Catalog\AttributeFamilyDataSource;
+use Webkul\AdminApi\Http\Controllers\API\ApiController;
+use Webkul\AdminApi\Http\Requests\Catalog\StoreAttributeFamilyRequest;
+use Webkul\AdminApi\Http\Requests\Catalog\UpdateAttributeFamilyRequest;
+use Webkul\Attribute\Repositories\AttributeFamilyGroupMappingRepository;
+use Webkul\Attribute\Repositories\AttributeFamilyRepository;
+use Webkul\Attribute\Repositories\AttributeGroupRepository;
+use Webkul\Attribute\Repositories\AttributeRepository;
+
+class AttributeFamilyController extends ApiController
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected AttributeFamilyRepository $attributeFamilyRepository,
+        protected AttributeFamilyGroupMappingRepository $attributeFamilyGroupMappingRepository,
+        protected AttributeGroupRepository $attributeGroupRepository,
+        protected AttributeRepository $attributeRepository,
+    ) {}
+
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(): JsonResponse
+    {
+        try {
+            return app(AttributeFamilyDataSource::class)->toJson();
+        } catch (\Exception $e) {
+            return $this->storeExceptionLog($e);
+        }
+    }
+
+    /**
+     * Display a single result of the resource.
+     */
+    public function get(string $code): JsonResponse
+    {
+        try {
+            return response()->json(app(AttributeFamilyDataSource::class)->getByCode($code));
+        } catch (\Exception $e) {
+            return $this->storeExceptionLog($e);
+        }
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(StoreAttributeFamilyRequest $request): JsonResponse
+    {
+        $requestData = request()->all();
+        $requestData = $this->setLabels($requestData);
+        $errors = [];
+        $requestData = $this->normalize($requestData, $errors);
+
+        if ($errors) {
+            return $this->validateErrorResponse($errors);
+        }
+
+        try {
+            Event::dispatch('catalog.attribute_family.create.before');
+            $attributeFamily = $this->attributeFamilyRepository->create($requestData);
+            Event::dispatch('catalog.attribute_family.create.after', $attributeFamily);
+
+            return $this->successResponse(
+                trans('admin::app.catalog.families.create-success'),
+                Response::HTTP_CREATED
+            );
+        } catch (\Exception $e) {
+            return $this->storeExceptionLog($e);
+        }
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(UpdateAttributeFamilyRequest $request, string $code): JsonResponse
+    {
+        $attributeFamily = $this->attributeFamilyRepository->findOneByField('code', $code);
+        if (! $attributeFamily) {
+            return $this->modelNotFoundResponse(trans('admin::app.catalog.families.not-found', ['code' => $code]));
+        }
+
+        $requestData = request()->except(['code']);
+        $requestData = $this->setLabels($requestData);
+        $id = $attributeFamily->id;
+        $errors = [];
+        $requestData = $this->normalize($requestData, $errors, $id);
+
+        if ($errors) {
+            return $this->validateErrorResponse($errors);
+        }
+
+        try {
+            Event::dispatch('catalog.attribute_family.update.before', $id);
+            $attributeFamily = $this->attributeFamilyRepository->update($requestData, $id);
+            Event::dispatch('catalog.attribute_family.update.after', $attributeFamily);
+
+            return $this->successResponse(
+                trans('admin::app.catalog.families.update-success'),
+                Response::HTTP_OK
+            );
+        } catch (\Exception $e) {
+            return $this->storeExceptionLog($e);
+        }
+    }
+
+    /**
+     * Partially update the specified resource.
+     */
+    public function partialUpdate(UpdateAttributeFamilyRequest $request, string $code): JsonResponse
+    {
+        return $this->update($request, $code);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function delete(string $code): JsonResponse
+    {
+        $attributeFamily = $this->attributeFamilyRepository->findOneByField('code', $code);
+        if (! $attributeFamily) {
+            return $this->modelNotFoundResponse(trans('admin::app.catalog.families.not-found', ['code' => $code]));
+        }
+
+        if ($attributeFamily->products()->count()) {
+            return $this->validateErrorResponse(
+                ['code' => [trans('admin::app.catalog.families.attribute-product-error')]],
+                trans('admin::app.catalog.families.attribute-product-error')
+            );
+        }
+
+        try {
+            Event::dispatch('catalog.attribute_family.delete.before', $attributeFamily->id);
+            $this->attributeFamilyRepository->delete($attributeFamily->id);
+            Event::dispatch('catalog.attribute_family.delete.after', $attributeFamily->id);
+
+            return $this->successResponse(trans('admin::app.catalog.families.delete-success'));
+        } catch (\Exception $e) {
+            return $this->storeExceptionLog($e);
+        }
+    }
+
+    /**
+     * Normalize custom attributes, and custom attribute groups data.
+     *
+     * @return array
+     */
+    private function normalize(array $requestData, &$errors, ?int $familyId = null)
+    {
+        if (empty($requestData['attribute_groups']) || ! is_array($requestData['attribute_groups'])) {
+            $requestData['attribute_groups'] = [];
+
+            return $requestData;
+        }
+
+        $attributeGroup = [];
+        foreach ($requestData['attribute_groups'] as $key => $value) {
+            $groupId = $this->attributeGroupRepository->findOneByField('code', $value['code'])?->id;
+            if (! $groupId) {
+                $errors[] = [
+                    'code' => trans('admin::app.catalog.attribute-groups.not-found', ['code' => $value['code']]),
+                ];
+            }
+
+            if ($familyId) {
+                $groupMappingId = $this->attributeFamilyGroupMappingRepository->findWhere([
+                    'attribute_group_id'  => $groupId,
+                    'attribute_family_id' => $familyId,
+                ])->first()?->id;
+
+                $value['attribute_groups_mapping'] = $groupMappingId;
+            }
+
+            $attributeGroup[$groupId] = $this->setAttributeAndPosition($value, $errors);
+        }
+
+        $requestData['attribute_groups'] = $attributeGroup;
+
+        return $requestData;
+    }
+
+    /**
+     * Set attribute and position for custom attributes.
+     *
+     * This method iterates over the custom attributes provided in the data array,
+     * sets the position for each attribute, and retrieves the ID of the attribute
+     * using its code. The retrieved ID is then assigned to the attribute.
+     *
+     * @return array The modified data array with attribute IDs and positions set.
+     */
+    private function setAttributeAndPosition(array $data, &$errors)
+    {
+        if (empty($data['custom_attributes']) || ! is_array($data['custom_attributes'])) {
+            return $data;
+        }
+
+        foreach ($data['custom_attributes'] as $key => $value) {
+            $data['custom_attributes'][$key]['position'] = $value['position'];
+            $attributeId = $this->attributeRepository->findOneByField('code', $value['code'])?->id;
+
+            if (! $attributeId) {
+                $errors[] = [
+                    'code' => trans('admin::app.catalog.attributes.not-found', ['code' => $value['code']]),
+                ];
+
+                continue;
+            }
+
+            $data['custom_attributes'][$key]['id'] = $attributeId;
+        }
+
+        return $data;
+    }
+}

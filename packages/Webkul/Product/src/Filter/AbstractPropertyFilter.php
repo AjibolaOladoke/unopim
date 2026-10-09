@@ -1,0 +1,60 @@
+<?php
+
+namespace Webkul\Product\Filter;
+
+use Illuminate\Support\Facades\DB;
+use Webkul\ElasticSearch\Contracts\PropertyFilter as PropertyFilterContract;
+use Webkul\Product\Enums\ProductType;
+
+abstract class AbstractPropertyFilter extends AbstractFilter implements PropertyFilterContract
+{
+    /** @var array */
+    protected $supportedProperties = [];
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsProperty($property)
+    {
+        return in_array($property, $this->supportedProperties);
+    }
+
+    /**
+     * Filter values arrive as a list even for single-value operators.
+     */
+    protected function scalarValue(mixed $value): mixed
+    {
+        return is_array($value) ? reset($value) : $value;
+    }
+
+    /**
+     * Retrieves the search table path based on the provided options.
+     */
+    protected function getSearchTablePath(array $options = [])
+    {
+        return $options['search_table_path'] ?? 'products';
+    }
+
+    /**
+     * Retrieves the IDs of parent products associated with the given SKUs.
+     */
+    protected function getParentIdsBySkus(array $skus, array $options = [])
+    {
+        $table = $this->getSearchTablePath($options);
+
+        return DB::table($table)
+            ->select("$table.id")
+            ->whereIn("$table.sku", $skus)
+            ->Where("$table.type", ProductType::Configurable->value)
+            ->pluck('id')
+            ->toArray();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getProperties()
+    {
+        return $this->supportedProperties;
+    }
+}

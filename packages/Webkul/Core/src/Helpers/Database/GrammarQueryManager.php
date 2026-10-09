@@ -1,0 +1,35 @@
+<?php
+
+namespace Webkul\Core\Helpers\Database;
+
+use Illuminate\Support\Facades\DB;
+use Webkul\Core\Contracts\Database\Grammar;
+use Webkul\Core\Helpers\Database\Grammars\MySQLGrammar;
+use Webkul\Core\Helpers\Database\Grammars\PostgresGrammar;
+
+class GrammarQueryManager
+{
+    protected static array $instances = [];
+
+    public static function getGrammar(?string $driver = null): Grammar
+    {
+        $driver ??= DB::getDriverName();
+
+        if (isset(static::$instances[$driver])) {
+            return static::$instances[$driver];
+        }
+
+        /**
+         * MariaDB speaks the MySQL dialect but Laravel reports it under its own
+         * driver name, so it has to be matched alongside `mysql` rather than
+         * falling through to the failure arm.
+         */
+        static::$instances[$driver] = match ($driver) {
+            'pgsql'            => new PostgresGrammar,
+            'mysql', 'mariadb' => new MySQLGrammar,
+            default            => throw new \RuntimeException("Unsupported DB driver: {$driver}")
+        };
+
+        return static::$instances[$driver];
+    }
+}

@@ -1,0 +1,85 @@
+<?php
+
+return [
+
+    /**
+     * Here you can connection status and prefix to use when building a client.
+     */
+    'connection' => env('ELASTICSEARCH_CONNECTION', 'default') ?: 'default',
+
+    'enabled'       => filter_var(env('ELASTICSEARCH_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+    'prefix'        => preg_replace('/\s+/', '', (string) (env('ELASTICSEARCH_INDEX_PREFIX') ?: env('APP_NAME', 'UnoPim'))),
+    'debug_payload' => filter_var(env('ELASTICSEARCH_DEBUG_PAYLOAD', false), FILTER_VALIDATE_BOOLEAN),
+
+    /**
+     * Upper bound on mapped fields per index. Every localisable or channel scoped
+     * attribute expands into its own field, so a catalogue with a wide attribute
+     * set exhausts Elasticsearch's default limit of 1000 and rejects documents.
+     */
+    'total_fields_limit' => (int) env('ELASTICSEARCH_TOTAL_FIELDS_LIMIT', 3000),
+
+    /**
+     * These are the available connections parameters that you can use to connect
+     */
+    'connections' => [
+        'default' => [
+            'hosts' => [
+                env('ELASTICSEARCH_HOST', 'http://localhost:9200'),
+            ],
+
+            'user'   => env('ELASTICSEARCH_USER', null),
+            'pass'   => env('ELASTICSEARCH_PASS', null),
+        ],
+
+        /**
+         * You can connect with API key authentication by setting the `api` key
+         * instead of the `user` and `pass` keys.
+         */
+        'api' => [
+            'hosts' => [
+                env('ELASTICSEARCH_HOST', null),
+            ],
+
+            'key'   => env('ELASTICSEARCH_API_KEY', null),
+        ],
+
+        /**
+         * You can connect to Elastic Cloud with the Cloud ID using the `cloud` key.
+         */
+        'cloud' => [
+            'id'      => env('ELASTICSEARCH_CLOUD_ID', null),
+
+            /**
+             * If you are authenticating with API KEY then set user and pass as null
+             */
+            'api_key' => env('ELASTICSEARCH_API_KEY', null),
+
+            /**
+             * If you are authenticating with username and password then set api_key as null
+             */
+            'user'    => env('ELASTICSEARCH_USER', null),
+            'pass'    => env('ELASTICSEARCH_PASS', null),
+        ],
+    ],
+
+    /**
+     * CA Bundle
+     *
+     * If you have the http_ca.crt certificate copied during the start of Elasticsearch
+     * then the path here
+     *
+     * @see https://www.elastic.co/guide/en/elasticsearch/client/php-api/current/connecting.html#auth-http
+     */
+    'caBundle' => null,
+
+    /**
+     * Retries
+     *
+     * By default, the client will retry n times, where n = number of nodes in
+     * your cluster. If you would like to disable retries, or change the number,
+     * you can do so here.
+     *
+     * @see https://www.elastic.co/guide/en/elasticsearch/client/php-api/current/set-retries.html
+     */
+    'retries' => null,
+];

@@ -1,0 +1,666 @@
+<?php
+
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Str;
+use Illuminate\Testing\Fluent\AssertableJson;
+use Webkul\Attribute\Models\AttributeFamily;
+use Webkul\Core\Facades\ElasticSearch;
+use Webkul\Product\Enums\ProductType;
+use Webkul\Product\Models\Product;
+use Webkul\Product\Models\VariantStructure;
+
+it('should return the product index page', function () {
+    $this->loginAsAdmin();
+
+    $this->get(route('admin.catalog.products.index'))
+        ->assertOk()
+        ->assertSeeText(trans('admin::app.catalog.products.index.title'));
+});
+
+it('should return validation errors for certain fields when creating', function () {
+    $this->loginAsAdmin();
+
+    $this->post(route('admin.catalog.products.store', []))
+        ->assertInvalid('type')
+        ->assertInvalid('attribute_family_id')
+        ->assertInvalid('sku');
+});
+
+it('should return the product datagrid', function () {
+    $this->loginAsAdmin();
+
+    $product = Product::factory()->create();
+
+    if (config('elasticsearch.enabled')) {
+        try {
+            $indexPrefix = config('elasticsearch.prefix');
+            $productIndex = strtolower($indexPrefix.'_products');
+
+            Artisan::call('unopim:product:index');
+
+            ElasticSearch::indices()->refresh(['index' => $productIndex]);
+        } catch (Exception $e) {
+        }
+    }
+
+    $response = $this->withHeaders([
+        'X-Requested-With' => 'XMLHttpRequest',
+    ])->json('GET', route('admin.catalog.products.index'));
+
+    $response->assertStatus(200);
+
+    $data = $response->json();
+
+    $this->assertArrayHasKey('records', $data);
+    $this->assertArrayHasKey('columns', $data);
+    $this->assertNotEmpty($data['records']);
+
+    $this->assertDatabaseHas($this->getFullTableName(Product::class), [
+        'sku' => $data['records'][0]['sku'],
+    ]);
+});
+
+it('should return unique validation for product sku while creating', function () {
+    $this->loginAsAdmin();
+
+    $product = seedRequiredProductValues(Product::factory()->configurable()->create());
+
+    $data = [
+        'sku'                 => $product->sku,
+        'type'                => ProductType::Simple->value,
+        'attribute_family_id' => $product->attribute_family_id,
+    ];
+
+    $this->post(route('admin.catalog.products.store'), $data)
+        ->assertRedirect()
+        ->assertInvalid('sku');
+
+    $this->assertDatabaseMissing($this->getFullTableName(Product::class), $data);
+});
+
+it('should create a simple product successfully', function () {
+    $this->loginAsAdmin();
+
+    $data = Product::factory()->definition();
+
+    $data['type'] = ProductType::Simple->value;
+
+    $this->post(route('admin.catalog.products.store', $data))
+        ->assertOk()
+        ->assertSessionHas('success', trans('admin::app.catalog.products.create-success'))
+        ->assertJson(fn (AssertableJson $json) => $json->whereType('data.redirect_url', 'string'));
+
+    $this->assertDatabaseHas($this->getFullTableName(Product::class), $data);
+});
+
+/**
+ * A configurable product may only be created for a family that already declares
+ * a variant structure, so every configurable fixture has to seed one.
+ */
+function makeVariantStructureFor(int $familyId): VariantStructure
+{
+    $axis = AttributeFamily::find($familyId)->getConfigurableAttributes()->first();
+
+    $structure = VariantStructure::create([
+        'attribute_family_id' => $familyId,
+        'code'                => 'vs_'.Str::random(8),
+        'name'                => 'Variant Structure',
+        'levels'              => 1,
+    ]);
+
+    if ($axis) {
+        $structure->axes()->create([
+            'level'          => 'level_1',
+            'attribute_id'   => $axis->id,
+            'position'       => 1,
+        ]);
+    }
+
+    return $structure->refresh();
+}
+
+it('should return json error if family lacks configurable attributes when creating configurable product', function () {
+    $this->loginAsAdmin();
+
+    $familyId = AttributeFamily::factory()->create()->id;
+
+    $data = [
+        'sku'                 => fake()->uuid,
+        'attribute_family_id' => $familyId,
+        'type'                => ProductType::Configurable->value,
+    ];
+
+    $this->post(route('admin.catalog.products.store'), $data)
+        ->assertStatus(422)
+        ->assertJsonFragment([
+            'errors' => [
+                'attribute_family_id' => [trans('admin::app.catalog.products.index.create.no-variant-structure')],
+            ],
+        ]);
+
+    $this->assertDatabaseMissing($this->getFullTableName(Product::class), $data);
+});
+
+it('should return the family variant structures when creating configurable product', function () {
+    $this->loginAsAdmin();
+
+    $data = Product::factory()->definition();
+
+    $data['type'] = ProductType::Configurable->value;
+
+    makeVariantStructureFor($data['attribute_family_id']);
+
+    $this->post(route('admin.catalog.products.store'), $data)
+        ->assertOk()
+        ->assertJson(fn (AssertableJson $json) => $json->whereType('data.variant_structures', 'array'));
+});
+
+it('should create a configurable product successfully', function () {
+    $this->loginAsAdmin();
+
+    $data = Product::factory()->definition();
+
+    $data['type'] = ProductType::Configurable->value;
+
+    $structure = makeVariantStructureFor($data['attribute_family_id']);
+
+    $data['variant_structure_id'] = $structure->id;
+
+    $this->post(route('admin.catalog.products.store'), $data)
+        ->assertOk()
+        ->assertSessionHas('success', trans('admin::app.catalog.products.create-success'))
+        ->assertJson(fn (AssertableJson $json) => $json->whereType('data.redirect_url', 'string'));
+
+    unset($data['variant_structure_id']);
+
+    $this->assertDatabaseHas($this->getFullTableName(Product::class), $data);
+
+    $productId = Product::where('sku', $data['sku'])->first()->id;
+
+    $this->assertDatabaseHas('product_super_attributes', [
+        'product_id'   => $productId,
+        'attribute_id' => $structure->axes()->value('attribute_id'),
+    ]);
+});
+
+it('should return the edit page for simple product successfully', function () {
+    $this->loginAsAdmin();
+
+    $product = seedRequiredProductValues(Product::factory()->simple()->create());
+
+    $this->get(route('admin.catalog.products.edit', $product->id))
+        ->assertOk()
+        ->assertSeeText(trans('admin::app.catalog.products.edit.title'))
+        ->assertSeeText(trans('admin::app.catalog.products.edit.categories.title'))
+        ->assertSeeText(trans('admin::app.catalog.products.edit.links.title'))
+        ->assertDontSeeText(trans('admin::app.catalog.products.edit.types.configurable.empty-title'));
+});
+
+it('should return the edit page for configurable product successfully', function () {
+    $this->loginAsAdmin();
+
+    $product = Product::factory()->configurable()->withConfigurableAttributes()->create();
+
+    $this->get(route('admin.catalog.products.edit', $product->id))
+        ->assertOk()
+        ->assertSeeText(trans('admin::app.catalog.products.edit.title'))
+        ->assertSeeText(trans('admin::app.catalog.products.edit.categories.title'))
+        ->assertSeeText(trans('admin::app.catalog.products.edit.links.title'))
+        ->assertSeeText(trans('admin::app.catalog.products.edit.types.configurable.empty-title'));
+});
+
+it('should copy the product successfully', function () {
+    $this->loginAsAdmin();
+
+    $product = seedRequiredProductValues(Product::factory()->simple()->create());
+
+    $productId = $product->id;
+
+    $response = $this->post(route('admin.catalog.products.copy', $productId))
+        ->assertSessionHas('success', trans('admin::app.catalog.products.product-copied'))
+        ->assertJsonFragment([
+            'redirect_url' => route('admin.catalog.products.edit', ++$productId),
+        ]);
+
+    $this->assertDatabaseHas($this->getFullTableName(Product::class), ['id' => $productId]);
+});
+
+it('should delete the product successfully', function () {
+    $this->loginAsAdmin();
+
+    $productId = Product::factory()->simple()->create()->id;
+
+    $this->delete(route('admin.catalog.products.delete', $productId))
+        ->assertOk()
+        ->assertJsonFragment(['message' => trans('admin::app.catalog.products.delete-success')]);
+
+    $this->assertDatabaseMissing($this->getFullTableName(Product::class), ['id' => $productId]);
+});
+
+it('should mass delete the products successfully', function () {
+    $this->loginAsAdmin();
+
+    $productIds = Product::factory()->simple()->createMany(3)->pluck('id')->toArray();
+
+    $this->post(route('admin.catalog.products.mass_delete'), ['indices' => $productIds])
+        ->assertOk()
+        ->assertJsonFragment(['message' => trans('admin::app.catalog.products.index.datagrid.mass-delete-success')]);
+
+    foreach ($productIds as $id) {
+        $this->assertDatabaseMissing($this->getFullTableName(Product::class), ['id' => $id]);
+    }
+});
+
+it('should mass update the status of products to enabled', function () {
+    $this->loginAsAdmin();
+
+    $products = Product::factory()->simple()->createMany(2);
+
+    $this->post(route('admin.catalog.products.mass_update'), ['indices' => $products->pluck('id')->toArray(), 'value' => true])
+        ->assertOk()
+        ->assertJsonFragment(['message' => trans('admin::app.catalog.products.index.datagrid.mass-update-success')]);
+
+    foreach ($products as $product) {
+        $product->refresh();
+
+        $this->assertEquals(1, $product->status);
+    }
+});
+
+it('should mass update the status of products to disabled', function () {
+    $this->loginAsAdmin();
+
+    $products = Product::factory()->simple()->createMany(2);
+
+    $this->post(route('admin.catalog.products.mass_update'), ['indices' => $products->pluck('id')->toArray(), 'value' => false])
+        ->assertOk()
+        ->assertJsonFragment(['message' => trans('admin::app.catalog.products.index.datagrid.mass-update-success')]);
+
+    foreach ($products as $product) {
+        $product->refresh();
+
+        $this->assertEquals(0, $product->status);
+    }
+});
+
+it('fires catalog.product.update.after for every product in a mass status update', function () {
+    $this->loginAsAdmin();
+
+    $products = Product::factory()->simple()->createMany(2);
+
+    Event::fake(['catalog.product.update.after']);
+
+    $this->post(route('admin.catalog.products.mass_update'), [
+        'indices' => $products->pluck('id')->toArray(),
+        'value'   => true,
+    ])->assertOk();
+
+    Event::assertDispatched('catalog.product.update.after', count($products));
+});
+/** Need to add more assertions */
+it('should search the products with sku successfully', function () {
+    $this->loginAsAdmin();
+
+    $products = Product::factory()->simple()->withInitialValues()->createMany(2);
+
+    $sku = $products->first()->sku;
+
+    $this->get(route('admin.catalog.products.search'), ['query' => $sku])
+        ->assertOk();
+});
+
+it('should search the products with uppercase sku successfully (case-insensitive)', function () {
+    $this->loginAsAdmin();
+
+    $products = Product::factory()->simple()->withInitialValues()->createMany(2);
+
+    $sku = strtoupper($products->first()->sku);
+
+    $this->get(route('admin.catalog.products.search', ['query' => $sku]))
+        ->assertOk();
+});
+
+it('should return validation error when setting duplicate variant configurable attribute value', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->create());
+
+    $attribute = $configurableProduct->super_attributes->first();
+
+    $newProduct = Product::factory()->simple()->create(['parent_id' => $configurableProduct->id]);
+
+    $data = [
+        'sku'    => $newProduct->sku,
+        'values' => [
+            'common' => [
+                $attribute->code => $attribute->options->first()->code,
+            ],
+        ],
+    ];
+
+    $expected = trans('admin::app.catalog.products.edit.types.configurable.variant-combination-exists', [
+        'values' => ($attribute->name ?: $attribute->code).': '.$attribute->options->first()->code,
+    ]);
+
+    $this->put(route('admin.catalog.products.update', $newProduct->id), $data)
+        ->assertSessionHas('warning', $expected);
+
+    $newProduct->refresh();
+
+    $this->assertNotEquals($newProduct->values['common'][$attribute->code] ?? '', $attribute->options->first()->code);
+});
+
+it('should create a new variant product for a configurable product without removing existing variant', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $variantSku = $configurableProduct->sku.'-variant_1';
+
+    $attribute = $configurableProduct->super_attributes->first();
+
+    $variantValue = $attribute->options->last()->code;
+
+    $existingVariant = $configurableProduct->variants->first();
+
+    $attribute = $attribute->code;
+
+    $data = [
+        'sku'      => $configurableProduct->sku,
+        'values'   => $configurableProduct->values,
+        'variants' => [
+            $existingVariant->id => [
+                'sku'    => $existingVariant->sku,
+                'values' => [
+                    'common' => [
+                        'sku'      => $existingVariant->sku,
+                        $attribute => $existingVariant->values['common'][$attribute],
+                    ],
+                ],
+            ],
+            'variant_1' => [
+                'sku'    => $variantSku,
+                'values' => [
+                    'common' => [
+                        'sku'      => $variantSku,
+                        $attribute => $variantValue,
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $this->put(route('admin.catalog.products.update', $configurableProduct->id), $data)
+        ->assertSessionHas('success', trans('admin::app.catalog.products.update-success'));
+
+    $this->assertModelWise([
+        Product::class => [
+            [
+                'sku'       => $variantSku,
+                'parent_id' => $configurableProduct->id,
+            ], [
+                'sku'       => $existingVariant->sku,
+                'parent_id' => $configurableProduct->id,
+            ],
+        ],
+    ]);
+});
+
+it('should show a readable message identifying the sku when variant skus are duplicated', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $attribute = $configurableProduct->super_attributes->first();
+
+    $variantValue = $attribute->options->last()->code;
+
+    $existingVariant = $configurableProduct->variants->first();
+
+    $attributeCode = $attribute->code;
+
+    $duplicateSku = $existingVariant->sku;
+
+    $data = [
+        'sku'      => $configurableProduct->sku,
+        'values'   => $configurableProduct->values,
+        'variants' => [
+            $existingVariant->id => [
+                'sku'    => $existingVariant->sku,
+                'values' => [
+                    'common' => [
+                        'sku'          => $existingVariant->sku,
+                        $attributeCode => $existingVariant->values['common'][$attributeCode],
+                    ],
+                ],
+            ],
+            'variant_1' => [
+                'sku'    => $duplicateSku,
+                'values' => [
+                    'common' => [
+                        'sku'          => $duplicateSku,
+                        $attributeCode => $variantValue,
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->putJson(route('admin.catalog.products.update', $configurableProduct->id), $data);
+
+    $response->assertStatus(422);
+
+    expect($response->json('errors')['variants.variant_1.sku'][0])
+        ->toBe(trans('admin::app.catalog.products.index.variant-sku-already-taken', ['sku' => $duplicateSku]));
+});
+
+it('should edit already existing variant product through a configurable product', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $attribute = $configurableProduct->super_attributes->first();
+
+    $variantValue = $attribute->options->last()->code;
+
+    $attribute = $attribute->code;
+
+    $variant = $configurableProduct->variants->first();
+
+    $variantSku = $variant->sku;
+
+    $data = [
+        'sku'      => $configurableProduct->sku,
+        'values'   => $configurableProduct->values,
+        'variants' => [
+            $variant->id => [
+                'sku'    => $variantSku,
+                'values' => [
+                    'common' => [
+                        'sku'      => $variantSku,
+                        $attribute => $variantValue,
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $this->put(route('admin.catalog.products.update', $configurableProduct->id), $data)
+        ->assertSessionHas('success', trans('admin::app.catalog.products.update-success'));
+
+    $variant->refresh();
+
+    $this->assertEquals($variant->sku, $variantSku);
+
+    $this->assertEquals($variant->values['common'][$attribute], $variantValue);
+});
+
+it('should remove already existing variant product through a configurable product', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $variant = $configurableProduct->variants()->first();
+
+    $variantData = [
+        'id'  => $variant->id,
+        'sku' => $variant->sku,
+    ];
+
+    $data = [
+        'sku'      => $configurableProduct->sku,
+        'values'   => $configurableProduct->values,
+        'variants' => [],
+    ];
+
+    $this->put(route('admin.catalog.products.update', $configurableProduct->id), $data)
+        ->assertSessionHas('success', trans('admin::app.catalog.products.update-success'));
+
+    $this->assertDatabaseMissing($this->getFullTableName(Product::class), $variantData);
+});
+
+it('should return a downloadable file response for quick export in xls format', function () {
+    $this->loginAsAdmin();
+
+    $product = Product::factory()->create();
+
+    $response = $this->withHeaders([
+        'X-Requested-With' => 'XMLHttpRequest',
+    ])->json('GET', route('admin.catalog.products.quick-export'), [
+        'export'     => 1,
+        'format'     => 'xls',
+        'pagination' => [
+            'page'     => 1,
+            'per_page' => 10,
+        ],
+    ]);
+
+    $response->assertOk();
+    $response->assertHeader('content-type', 'application/vnd.ms-excel');
+    $response->assertHeader('content-disposition');
+});
+
+it('should render product edit page header with sticky top offset so save button stays visible while scrolling', function () {
+    $this->loginAsAdmin();
+
+    $product = seedRequiredProductValues(Product::factory()->simple()->create());
+
+    $response = $this->get(route('admin.catalog.products.edit', $product->id));
+
+    $response->assertOk();
+
+    $content = $response->getContent();
+
+    $this->assertStringContainsString(
+        'js-sticky-header',
+        $content,
+        'Product edit page header should have sticky positioning with a top offset so the save button is visible while scrolling'
+    );
+});
+
+it('should return 404 instead of 500 when the product edit id is non-numeric', function () {
+    $this->loginAsAdmin();
+
+    $this->get('admin/catalog/products/edit/303452sfsd')
+        ->assertNotFound();
+
+    $this->get('admin/catalog/products/edit/303452+123')
+        ->assertNotFound();
+});
+
+it('should return 404 when the product edit id is numeric but missing', function () {
+    $this->loginAsAdmin();
+
+    $this->get(route('admin.catalog.products.edit', 30345))
+        ->assertNotFound();
+});
+
+it('should render the product edit form with the ajax submit handler enabled', function () {
+    $this->loginAsAdmin();
+
+    $product = seedRequiredProductValues(Product::factory()->simple()->create());
+
+    $this->get(route('admin.catalog.products.edit', $product->id))
+        ->assertOk()
+        ->assertSee('data-ajax-form="true"', false)
+        ->assertSee('submit="$root.onAjaxSubmit"', false);
+});
+
+it('should return a json success message without redirect when updating a product via ajax', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $data = [
+        'sku'    => $configurableProduct->sku,
+        'values' => $configurableProduct->values,
+    ];
+
+    $this->putJson(route('admin.catalog.products.update', $configurableProduct->id), $data, ['X-Ajax-Form' => 'true'])
+        ->assertOk()
+        ->assertJsonFragment(['message' => trans('admin::app.catalog.products.update-success')]);
+});
+
+it('should keep the redirect behaviour when updating a product without ajax', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->withInitialValues()->create());
+
+    $data = [
+        'sku'    => $configurableProduct->sku,
+        'values' => $configurableProduct->values,
+    ];
+
+    $this->put(route('admin.catalog.products.update', $configurableProduct->id), $data)
+        ->assertRedirect()
+        ->assertSessionHas('success', trans('admin::app.catalog.products.update-success'));
+});
+
+it('should return json 422 validation errors when updating a product with a duplicate sku via ajax', function () {
+    $this->loginAsAdmin();
+
+    $existingProduct = Product::factory()->simple()->withInitialValues()->create();
+
+    $product = Product::factory()->simple()->withInitialValues()->create();
+
+    $values = $product->values;
+
+    $values['common']['sku'] = $existingProduct->sku;
+
+    $data = [
+        'sku'    => $existingProduct->sku,
+        'values' => $values,
+    ];
+
+    $this->putJson(route('admin.catalog.products.update', $product->id), $data)
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('sku');
+});
+
+it('should return a json message instead of redirecting when an ajax update hits the duplicate variant guard', function () {
+    $this->loginAsAdmin();
+
+    $configurableProduct = seedRequiredProductValues(Product::factory()->configurable()->withVariantProduct()->create());
+
+    $attribute = $configurableProduct->super_attributes->first();
+
+    $newProduct = Product::factory()->simple()->create(['parent_id' => $configurableProduct->id]);
+
+    $data = [
+        'sku'    => $newProduct->sku,
+        'values' => [
+            'common' => [
+                $attribute->code => $attribute->options->first()->code,
+            ],
+        ],
+    ];
+
+    $expected = trans('admin::app.catalog.products.edit.types.configurable.variant-combination-exists', [
+        'values' => ($attribute->name ?: $attribute->code).': '.$attribute->options->first()->code,
+    ]);
+
+    $this->putJson(route('admin.catalog.products.update', $newProduct->id), $data, ['X-Ajax-Form' => 'true'])
+        ->assertUnprocessable()
+        ->assertJsonFragment(['message' => $expected]);
+});

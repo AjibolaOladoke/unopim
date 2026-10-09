@@ -1,0 +1,225 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Settings;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Settings\CurrencyDataGrid;
+use Webkul\Admin\Helpers\MassActionCounter;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\CurrencyForm;
+use Webkul\Admin\Http\Requests\SelectableMassDestroyRequest;
+use Webkul\Admin\Http\Requests\SelectableMassUpdateRequest;
+use Webkul\Core\Repositories\CurrencyRepository;
+
+class CurrencyController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(protected CurrencyRepository $currencyRepository) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(CurrencyDataGrid::class)->toJson();
+        }
+
+        return view('admin::settings.currencies.index');
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(CurrencyForm $request): JsonResponse
+    {
+        $this->currencyRepository->create(request()->only([
+            'code',
+            'symbol',
+            'decimal',
+            'status',
+        ]));
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.currencies.index.create-success'),
+        ]);
+    }
+
+    /**
+     * Currency Details
+     */
+    public function edit(int $id): View|JsonResponse
+    {
+        $currency = $this->currencyRepository->findOrFail($id);
+
+        if (! request()->expectsJson()) {
+            return view('admin::settings.currencies.edit', compact('currency'));
+        }
+
+        return new JsonResponse($currency);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(CurrencyForm $request): JsonResponse
+    {
+        $id = request('id');
+
+        if (! request()->status && $this->currencyRepository->checkCurrencyBeingUsed($id)) {
+            return new JsonResponse([
+                'errors' => [
+                    'status' => trans('admin::app.settings.currencies.index.can-not-disable-error'),
+                ],
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $this->currencyRepository->update(request()->only([
+            'symbol',
+            'decimal',
+            'status',
+        ]), $id);
+
+        return new JsonResponse([
+            'message'      => trans('admin::app.settings.currencies.index.update-success'),
+            'redirect_url' => route('admin.settings.currencies.index'),
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $id): JsonResponse
+    {
+        $currency = $this->currencyRepository->findOrFail($id);
+
+        if ($currency->count() == 1) {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.currencies.index.last-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if ($currency->isCurrencyBeingUsed()) {
+            return response()->json([
+                'message' => trans('admin::app.settings.currencies.index.can-not-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $this->currencyRepository->delete($id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.currencies.index.delete-success'),
+            ], JsonResponse::HTTP_OK);
+        } catch (\Exception $e) {
+            report($e);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.currencies.index.delete-failed'),
+        ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Mass Delete currencies
+     */
+    public function massDestroy(SelectableMassDestroyRequest $massDestroyRequest): JsonResponse
+    {
+        $currencyIds = $massDestroyRequest->selectedIds(CurrencyDataGrid::class);
+        $delete = false;
+
+        foreach ($currencyIds as $currencyId) {
+            $currency = $this->currencyRepository->find($currencyId);
+
+            if (! $currency) {
+                continue;
+            }
+
+            if ($currency->count() == 1) {
+                return new JsonResponse([
+                    'message' => trans('admin::app.settings.currencies.index.last-delete-error'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            }
+
+            if ($currency->isCurrencyBeingUsed()) {
+                continue;
+            }
+
+            try {
+                $this->currencyRepository->delete($currencyId);
+
+                $delete = true;
+            } catch (\Exception $e) {
+                report($e);
+
+                return new JsonResponse([
+                    'message' => $e->getMessage(),
+                ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        if (! $delete) {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.currencies.index.cannot-delete'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.currencies.index.delete-success'),
+        ], JsonResponse::HTTP_OK);
+    }
+
+    /**
+     * Mass update currencies status through datagrid
+     */
+    public function massUpdate(SelectableMassUpdateRequest $massUpdateRequest): JsonResponse
+    {
+        $currencyIds = $massUpdateRequest->selectedIds(CurrencyDataGrid::class);
+
+        $value = (int) $massUpdateRequest->input('value');
+
+        $counter = new MassActionCounter;
+
+        foreach ($currencyIds as $currencyId) {
+            $currency = $this->currencyRepository->find($currencyId);
+
+            if (! $currency) {
+                continue;
+            }
+
+            if ($currency->isCurrencyBeingUsed() && $value === 0) {
+                $counter->skipped();
+
+                continue;
+            }
+
+            try {
+                $currency->status = $value;
+
+                $currency->save();
+
+                $counter->succeeded();
+            } catch (\Exception $e) {
+                report($e);
+
+                return new JsonResponse([
+                    'message' => $e->getMessage(),
+                ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        return $this->respondMassAction(
+            $counter,
+            'admin::app.settings.currencies.index.can-not-disable-error',
+            'admin::app.settings.currencies.index.partial-update-success',
+            'admin::app.settings.currencies.index.update-success',
+        );
+    }
+}

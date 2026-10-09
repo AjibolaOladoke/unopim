@@ -1,0 +1,80 @@
+<?php
+
+namespace Webkul\DataTransfer\Helpers\Sources;
+
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+
+class Excel extends AbstractSource
+{
+    /**
+     * CSV reader
+     */
+    protected mixed $reader;
+
+    /**
+     * Current row number
+     */
+    protected int $currentRowNumber = 1;
+
+    /**
+     * Create a new helper instance.
+     */
+    public function __construct(string $filePath)
+    {
+        $path = self::resolveReadablePath($filePath);
+
+        try {
+            $factory = IOFactory::load($path);
+
+            $this->reader = $factory->getActiveSheet();
+
+            $highestColumn = $this->reader->getHighestColumn();
+
+            $this->totalColumns = Coordinate::columnIndexFromString($highestColumn);
+
+            $headerRow = $this->getNextRow();
+
+            if ($headerRow === false || $headerRow === []) {
+                throw new \LogicException(trans('data_transfer::app.validation.errors.file-empty'));
+            }
+
+            $this->columnNames = $headerRow;
+        } catch (\LogicException $e) {
+            throw $e;
+        } catch (\Exception) {
+            throw new \LogicException("Unable to open file: '{$filePath}'");
+        }
+    }
+
+    /**
+     * Read next line from csv
+     */
+    protected function getNextRow(): array|bool
+    {
+        $rowData = [];
+
+        for ($column = 1; $column <= $this->totalColumns; $column++) {
+            $cellValue = $this->reader->getCellByColumnAndRow($column, $this->currentRowNumber)->getValue();
+            $rowData[] = $cellValue !== null ? (string) $cellValue : null;
+        }
+
+        $filteredRowData = array_filter($rowData);
+
+        if ($filteredRowData === []) {
+            return false;
+        }
+
+        return $rowData;
+    }
+
+    /**
+     * Rewind the iterator to the first row
+     */
+    public function rewind(): void
+    {
+        $this->currentRowNumber = 1;
+
+        $this->next();
+    }
+}

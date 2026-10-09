@@ -1,0 +1,125 @@
+<?php
+
+namespace Webkul\ElasticSearch;
+
+/**
+ * This class is responsible for building Elasticsearch queries in a structured way.
+ * It supports `must`, `must_not`, `should`, `filter`, `sort`, and `aggregation` clauses.
+ */
+class ElasticSearchQuery
+{
+    private array $excludeConditions = [];
+
+    private array $filterConditions = [];
+
+    private array $orConditions = [];
+
+    private array $includeConditions = [];
+
+    private array $sortingConditions = [];
+
+    private array $aggregationConditions = [];
+
+    /**
+     * Add a `must_not` clause to the query.
+     */
+    public function whereNot(array $clause): self
+    {
+        $this->excludeConditions[] = $clause;
+
+        return $this;
+    }
+
+    /**
+     * Add a `filter` clause to the query.
+     */
+    public function where(array $clause): self
+    {
+        $this->filterConditions[] = $clause;
+
+        return $this;
+    }
+
+    /**
+     * Add a `should` clause to the query.
+     */
+    public function orWhere(array $clause): self
+    {
+        $this->orConditions[] = $clause;
+
+        return $this;
+    }
+
+    /**
+     * Add a `must` clause to the query.
+     */
+    public function must(array $clause): self
+    {
+        $this->includeConditions[] = $clause;
+
+        return $this;
+    }
+
+    /**
+     * Add a `sort` clause to the query.
+     */
+    public function orderBy(array $sort): self
+    {
+        $this->sortingConditions = array_merge($this->sortingConditions, $sort);
+
+        return $this;
+    }
+
+    /**
+     * Check if a sort clause exists for a specific field.
+     */
+    public function hasOrderBy(string $field): bool
+    {
+        return array_key_exists($field, $this->sortingConditions);
+    }
+
+    /**
+     * Add an aggregation (facet) clause to the query.
+     */
+    public function addAggregation(string $name, string $field): self
+    {
+        $this->aggregationConditions[$name] = ['terms' => ['field' => $field]];
+
+        return $this;
+    }
+
+    /**
+     * Build and return the Elasticsearch query.
+     */
+    public function build(array $source = []): array
+    {
+        $searchQuery = [];
+
+        if ($this->filterConditions !== []) {
+            $searchQuery['query']['constant_score']['filter']['bool']['filter'] = $this->filterConditions;
+        }
+
+        if ($this->includeConditions !== []) {
+            $searchQuery['query']['constant_score']['filter']['bool']['must'] = $this->includeConditions;
+        }
+
+        if ($this->excludeConditions !== []) {
+            $searchQuery['query']['constant_score']['filter']['bool']['must_not'] = $this->excludeConditions;
+        }
+
+        if ($this->orConditions !== []) {
+            $searchQuery['query']['constant_score']['filter']['bool']['should'] = $this->orConditions;
+            $searchQuery['query']['constant_score']['filter']['bool']['minimum_should_match'] = 1;
+        }
+
+        if ($this->sortingConditions !== []) {
+            $searchQuery['sort'] = $this->sortingConditions;
+        }
+
+        if ($this->aggregationConditions !== []) {
+            $searchQuery['aggs'] = $this->aggregationConditions;
+        }
+
+        return $searchQuery;
+    }
+}

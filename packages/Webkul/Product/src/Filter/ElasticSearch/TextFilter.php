@@ -1,0 +1,129 @@
+<?php
+
+namespace Webkul\Product\Filter\ElasticSearch;
+
+use Webkul\Attribute\Rules\AttributeTypes;
+use Webkul\ElasticSearch\Enums\FilterOperators;
+use Webkul\ElasticSearch\QueryString;
+
+/**
+ * Text filter for an Elasticsearch query
+ */
+class TextFilter extends AbstractElasticSearchAttributeFilter
+{
+    public function __construct(
+        array $supportedAttributeTypes = [AttributeTypes::ATTRIBUTE_TYPES[0], AttributeTypes::ATTRIBUTE_TYPES[1]],
+        array $allowedOperators = [
+            FilterOperators::IN,
+            FilterOperators::CONTAINS,
+            FilterOperators::WILDCARD,
+            FilterOperators::EQUAL,
+            FilterOperators::NOT_IN,
+            FilterOperators::IS_EMPTY,
+            FilterOperators::IS_NOT_EMPTY,
+        ]
+    ) {
+        $this->supportedAttributeTypes = $supportedAttributeTypes;
+        $this->allowedOperators = $allowedOperators;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function addAttributeFilter(
+        $attribute,
+        $operator,
+        $value,
+        ?string $locale = null,
+        ?string $channel = null,
+        $options = []
+    ): static {
+        throw_if($this->queryBuilder === null, \LogicException::class, 'The search query builder is not initialized in the filter.');
+
+        $attributePath = $this->getScopedAttributePath($attribute, $locale, $channel);
+
+        switch ($operator) {
+            case FilterOperators::IN:
+                $clause = [
+                    'terms' => [
+                        $attributePath => $value,
+                    ],
+                ];
+
+                $this->queryBuilder->where($clause);
+                break;
+
+            case FilterOperators::CONTAINS:
+                /**
+                 * Use match_phrase_prefix for text fields instead of query_string with leading
+                 * wildcards to avoid exceeding maxClauseCount on large indexes.
+                 */
+                $clauses = [];
+
+                foreach ((array) $value as $val) {
+                    $clauses[] = [
+                        'match_phrase_prefix' => [
+                            $attributePath => [
+                                'query'          => $val,
+                                'max_expansions' => 1000,
+                            ],
+                        ],
+                    ];
+                }
+
+                $clause = count($clauses) === 1 ? $clauses[0] : [
+                    'bool' => [
+                        'should'               => $clauses,
+                        'minimum_should_match' => 1,
+                    ],
+                ];
+
+                $this->queryBuilder->where($clause);
+                break;
+
+            case FilterOperators::WILDCARD:
+                /**
+                 * Cap wildcard expansion with rewrite: 'top_terms_1024' to avoid
+                 * exceeding maxClauseCount on high-cardinality keyword fields.
+                 */
+                $escapedValue = QueryString::escapeValue(current((array) $value));
+                $clause = [
+                    'wildcard' => [
+                        $attributePath.'.keyword' => [
+                            'value'   => '*'.$escapedValue.'*',
+                            'rewrite' => 'top_terms_1024',
+                        ],
+                    ],
+                ];
+
+                $this->queryBuilder->where($clause);
+                break;
+
+            case FilterOperators::EQUAL:
+                $this->queryBuilder->where([
+                    'term' => [$attributePath.'.keyword' => current((array) $value)],
+                ]);
+
+                break;
+
+            case FilterOperators::NOT_IN:
+                $this->queryBuilder->whereNot([
+                    'terms' => [$attributePath.'.keyword' => (array) $value],
+                ]);
+
+                break;
+
+            case FilterOperators::IS_EMPTY:
+                $this->queryBuilder->whereNot(['exists' => ['field' => $attributePath]]);
+
+                break;
+
+            case FilterOperators::IS_NOT_EMPTY:
+                $this->queryBuilder->where(['exists' => ['field' => $attributePath]]);
+
+                break;
+        }
+
+        return $this;
+    }
+}

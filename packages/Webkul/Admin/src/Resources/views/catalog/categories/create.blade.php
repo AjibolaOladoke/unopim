@@ -1,0 +1,125 @@
+<x-admin::layouts>
+    <x-slot:title>
+        @lang('admin::app.catalog.categories.create.title')
+    </x-slot>
+
+    {!! view_render_event('unopim.admin.catalog.categories.create.before') !!}
+
+    <x-admin::form
+        ajax
+        :action="route('admin.catalog.categories.store')"
+        enctype="multipart/form-data"
+    >
+        {!! view_render_event('unopim.admin.catalog.categories.create.create_form_controls.before') !!}
+
+        <x-admin::page-header :title="trans('admin::app.catalog.categories.create.title')">
+            <x-slot:actions>
+                <a
+                    href="{{ route('admin.catalog.categories.index') }}"
+                    class="transparent-button"
+                >
+                    @lang('admin::app.catalog.categories.create.back-btn')
+                </a>
+
+                <button
+                    type="submit"
+                    class="primary-button"
+                >
+                    @lang('admin::app.catalog.categories.create.save-btn')
+                </button>
+            </x-slot>
+        </x-admin::page-header>
+
+        <div class="flex gap-2.5 mt-3.5 max-xl:flex-wrap">
+
+            <div class="flex flex-col gap-2 flex-1 max-xl:flex-auto">
+
+                {!! view_render_event('unopim.admin.catalog.categories.create.card.general.before') !!}
+
+                <div class="p-4 bg-white dark:bg-cherry-900 rounded box-shadow">
+                    <p class="mb-4 text-base text-gray-800 dark:text-white font-semibold">
+                        @lang('admin::app.catalog.categories.create.general')
+                    </p>
+
+                    <x-admin::form.control-group.control
+                        type="hidden"
+                        name="locale"
+                        :value="core()->getRequestedLocaleCode()"
+                    />
+
+                    <x-admin::form.control-group>
+                        <x-admin::form.control-group.label class="required">
+                            @lang('admin::app.catalog.categories.create.code')
+                        </x-admin::form.control-group.label>
+
+                        <x-admin::form.control-group.control
+                            type="text"
+                            name="code"
+                            rules="required"
+                            :value="old('code')"
+                            v-code
+                        />
+
+                        <x-admin::form.control-group.error control-name="code" />
+                    </x-admin::form.control-group>
+
+                </div>
+                
+                {!! view_render_event('unopim.admin.catalog.categories.create.card.general.after') !!}
+
+                @if (! $leftCategoryFields->isEmpty())
+                    <div class="p-4 bg-white dark:bg-cherry-900 rounded box-shadow">
+                        <x-admin::categories.dynamic-fields
+                            :fields="$leftCategoryFields"
+                        >
+                        </x-admin::categories.dynamic-fields>
+    
+                        {!! view_render_event('unopim.admin.catalog.categories.create.card.left-section.after') !!}
+                    </div>
+                @endif
+            </div>
+
+            <div class="flex flex-col gap-2 w-[360px] max-w-full">
+                <div class="p-4 bg-white dark:bg-cherry-900 rounded box-shadow">
+                    <h2 class="block mb-2.5 text-base text-gray-800 dark:text-white font-medium leading-6">
+                        @lang('admin::app.catalog.categories.create.parent-category')
+                    </h2>
+
+                    <div class="flex flex-col gap-3 h-[calc(100vh-100px)] overflow-y-auto">
+                        <x-admin::tree.category.view
+                            input-type="radio"
+                            id-field="id"
+                            label-field="name"
+                            name-field="parent_id"
+                            value-field="id"
+                            children-page-size="100"
+                            :items="json_encode($categories)"
+                            :fallback-locale="config('app.fallback_locale')"
+                            :value="old('parent_id') ?? ''"
+                        />
+                    </div>
+                </div>
+
+                @if (! $rightCategoryFields?->isEmpty())
+                    {!! view_render_event('unopim.admin.catalog.categories.create.card.accordion.right-section.before') !!}
+                    <x-admin::accordion :title="trans('admin::app.catalog.categories.create.right-section')">
+
+                        <x-slot:content>
+                            <x-admin::categories.dynamic-fields
+                                :fields="$rightCategoryFields"
+                            >
+                            </x-admin::categories.dynamic-fields>
+                        </x-slot>
+                    </x-admin::accordion>
+
+                    {!! view_render_event('unopim.admin.catalog.categories.create.card.accordion.right-section.after') !!}
+                @endif
+            </div>
+        </div>
+
+        {!! view_render_event('unopim.admin.catalog.categories.create.create_form_controls.after') !!}
+
+    </x-admin::form>
+
+    {!! view_render_event('unopim.admin.catalog.categories.create.after') !!}
+</x-admin::layouts>

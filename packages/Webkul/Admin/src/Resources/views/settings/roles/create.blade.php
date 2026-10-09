@@ -1,0 +1,194 @@
+<x-admin::layouts>
+    <x-slot:title>
+        @lang('admin::app.settings.roles.create.title')
+    </x-slot>
+
+    {!! view_render_event('unopim.admin.settings.roles.create.before') !!}
+
+    <v-create-user-role></v-create-user-role>
+
+    {!! view_render_event('unopim.admin.settings.roles.create.after') !!}
+
+    @pushOnce('scripts')
+        <script
+            type="text/x-template"
+            id="v-create-user-role-template"
+        >
+            <div>
+                <x-admin::form ajax :action="route('admin.settings.roles.store')">
+                    {!! view_render_event('unopim.admin.settings.roles.create.create_form_controls.before') !!}
+
+                    <x-admin::page-header :title="trans('admin::app.settings.roles.create.title')">
+                        <x-slot:actions>
+                            <a
+                                href="{{ route('admin.settings.roles.index') }}"
+                                class="transparent-button"
+                            >
+                                @lang('admin::app.settings.roles.create.back-btn')
+                            </a>
+
+                            <button
+                                type="submit"
+                                class="primary-button"
+                            >
+                                @lang('admin::app.settings.roles.create.save-btn')
+                            </button>
+                        </x-slot>
+                    </x-admin::page-header>
+
+                    <div class="flex gap-2.5 mt-3.5 max-xl:flex-wrap">
+                        <div class="flex flex-col gap-2 flex-1 max-xl:flex-auto">
+
+                            {!! view_render_event('unopim.admin.settings.roles.create.card.access_control.before') !!}
+
+                            <div class="p-4 bg-white dark:bg-cherry-900 rounded box-shadow">
+                                <p class="text-base text-gray-800 dark:text-white font-semibold mb-4">
+                                    @lang('admin::app.settings.roles.create.access-control')
+                                </p>
+
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.settings.roles.create.permissions')
+                                    </x-admin::form.control-group.label>
+
+                                    @php
+                                        $options = json_encode([
+                                            [
+                                                'id'          => 'custom',
+                                                'label'       => __('admin::app.settings.roles.create.custom'),
+                                                'description' => __('admin::app.settings.roles.create.custom-description'),
+                                            ],
+                                            [
+                                                'id'          => 'all',
+                                                'label'       => __('admin::app.settings.roles.create.all'),
+                                                'description' => __('admin::app.settings.roles.create.all-description'),
+                                            ]
+                                        ]);
+                                    
+                                    @endphp
+
+                                    <x-admin::form.control-group.control
+                                        type="select"
+                                        name="permission_type"
+                                        id="permission_type"
+                                        rules="required"
+                                        :label="trans('admin::app.settings.roles.create.permissions')"
+                                        :placeholder="trans('admin::app.settings.roles.create.permissions')"
+                                        v-model="permission_type"
+                                        :options="$options"
+                                        track-by="id"
+                                        label-by="label"
+                                    >
+                                         
+                                    </x-admin::form.control-group.control>
+
+                                    <x-admin::form.control-group.error control-name="permission_type" />
+                                </x-admin::form.control-group>
+
+                                <div v-if="permission_type == 'custom' || selected_permission_type == 'custom'">
+                                    <x-admin::tree.view
+                                        input-type="checkbox"
+                                        value-field="key"
+                                        id-field="key"
+                                        :items="json_encode($acl->items)"
+                                        :fallback-locale="config('app.fallback_locale')"
+                                    />
+                                </div>
+                            </div>
+
+                            {!! view_render_event('unopim.admin.settings.roles.create.card.access_control.after') !!}
+
+                        </div>
+                        <div class="flex flex-col gap-2 w-[360px] max-w-full max-sm:w-full">
+
+                            {!! view_render_event('unopim.admin.settings.roles.create.card.accordion.general.before') !!}
+
+                            <x-admin::accordion :title="trans('admin::app.settings.roles.create.general')">
+
+                                <x-slot:content>
+                                    <x-admin::form.control-group>
+                                        <x-admin::form.control-group.label class="required">
+                                            @lang('admin::app.settings.roles.create.name')
+                                        </x-admin::form.control-group.label>
+
+                                        <x-admin::form.control-group.control
+                                            type="text"
+                                            id="name"
+                                            name="name"
+                                            rules="required"
+                                            value="{{ old('name') }}"
+                                            :label="trans('admin::app.settings.roles.create.name')"
+                                            :placeholder="trans('admin::app.settings.roles.create.name')"
+                                        />
+
+                                        <x-admin::form.control-group.error control-name="name" />
+                                    </x-admin::form.control-group>
+
+                                    <x-admin::form.control-group class="!mb-0">
+                                        <x-admin::form.control-group.label>
+                                            @lang('admin::app.settings.roles.create.description')
+                                        </x-admin::form.control-group.label>
+
+                                        <x-admin::form.control-group.control
+                                            type="textarea"
+                                            id="description"
+                                            name="description"
+                                            :value="old('description')"
+                                            :label="trans('admin::app.settings.roles.create.description')"
+                                            :placeholder="trans('admin::app.settings.roles.create.description')"
+                                        />
+
+                                        <x-admin::form.control-group.error control-name="description" />
+                                    </x-admin::form.control-group>
+                                </x-slot>
+                            </x-admin::accordion>
+
+                            {!! view_render_event('unopim.admin.settings.roles.create.card.accordion.general.after') !!}
+
+                        </div>
+                    </div>
+
+                    {!! view_render_event('unopim.admin.settings.roles.create.create_form_controls.after') !!}
+
+                </x-admin::form>
+            </div>
+        </script>
+
+        <script type="module">
+            app.component('v-create-user-role', {
+                template: '#v-create-user-role-template',
+
+                data() {
+                    
+                    return {
+                        permission_type: 'custom',
+                        selected_permission_type: 'custom'
+                    };
+                },
+                watch: {
+                    permission_type(value) {
+                        this.selected_permission_type = this.parseValue(value)?.id;
+                    },
+                },
+                methods: {
+                    parseValue(value) {
+                        try {
+                            return value ? JSON.parse(value) : null;
+                        } catch (error) {
+                            return value;
+                        }
+                    },
+
+                    onAjaxSubmit(...args) {
+                        return this.$root.onAjaxSubmit(...args);
+                    },
+
+                    onInvalidSubmit(...args) {
+                        return this.$root.onInvalidSubmit(...args);
+                    },
+                }
+
+            })
+        </script>
+    @endPushOnce
+</x-admin::layouts>

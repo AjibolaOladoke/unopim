@@ -1,0 +1,219 @@
+<?php
+
+namespace Webkul\Core\ImageCache;
+
+use Closure;
+use Exception;
+use Illuminate\Http\Response;
+use Illuminate\Routing\Controller as BaseController;
+use Illuminate\Support\Facades\Request;
+
+class Controller extends BaseController
+{
+    /**
+     * The current cache template name.
+     */
+    protected string $template = '';
+
+    /**
+     * UnoPim logo URL.
+     */
+    protected const PIM_LOGO = 'https://updates.unopim.com/unopim.png';
+
+    /**
+     * Get HTTP response of either original image file or template applied file.
+     */
+    public function getResponse(string $template, string $filename): Response
+    {
+        $this->template = $template;
+
+        return match (strtolower($template)) {
+            'original' => $this->getOriginal($filename),
+            'download' => $this->getDownload($filename),
+            'logo'     => $this->getLogo(),
+            default    => $this->getImage($template, $filename),
+        };
+    }
+
+    /**
+     * Get HTTP response of template applied image file.
+     */
+    protected function getImage(string $template, string $filename): Response
+    {
+        $templateConfig = $this->getTemplate($template);
+
+        abort_unless($templateConfig, 404, 'Template not found.');
+
+        $path = $this->getImagePath($filename);
+
+        abort_unless(file_exists($path), 404, 'Image not found.');
+
+        try {
+            $image = image_manager()->read($path);
+
+            if (is_object($templateConfig) && method_exists($templateConfig, 'applyFilter')) {
+                $image = $templateConfig->applyFilter($image);
+            } elseif (class_exists($templateConfig)) {
+                $filter = new $templateConfig;
+
+                if (method_exists($filter, 'applyFilter')) {
+                    $image = $filter->applyFilter($image);
+                }
+            } elseif ($templateConfig instanceof Closure) {
+                $image = $templateConfig($image);
+            }
+
+            $content = (string) $image->encodeByMediaType();
+        } catch (Exception) {
+            abort(404, 'Unable to process image.');
+        }
+
+        return $this->buildResponse($content);
+    }
+
+    /**
+     * Get the logo image from a remote URL.
+     */
+    protected function getLogo(): Response
+    {
+        try {
+            $content = $this->fetchFromUrl(self::PIM_LOGO);
+
+            return $this->buildResponse($content);
+        } catch (Exception) {
+            abort(404, 'Unable to fetch logo.');
+        }
+    }
+
+    /**
+     * Fetch image content from a URL.
+     *
+     * @throws Exception
+     */
+    protected function fetchFromUrl(string $url): string
+    {
+        $domain = config('app.url');
+
+        $options = [
+            'http' => [
+                'method'           => 'GET',
+                'protocol_version' => 1.1,
+                'timeout'          => 5,
+                'header'           => "Accept-language: en\r\n"
+                    ."Domain: $domain\r\n"
+                    ."User-Agent: Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36\r\n",
+            ],
+        ];
+
+        $context = stream_context_create($options);
+
+        $data = @file_get_contents($url, false, $context);
+
+        throw_if($data === false, Exception::class, 'Unable to fetch from URL: '.$url);
+
+        return $data;
+    }
+
+    /**
+     * Get the original image without any transformations.
+     */
+    protected function getOriginal(string $filename): Response
+    {
+        $path = $this->getImagePath($filename);
+
+        abort_unless(file_exists($path), 404, 'Image not found.');
+
+        $content = file_get_contents($path);
+
+        return $this->buildResponse($content);
+    }
+
+    /**
+     * Get the image as a download.
+     */
+    protected function getDownload(string $filename): Response
+    {
+        $path = $this->getImagePath($filename);
+
+        abort_unless(file_exists($path), 404, 'Image not found.');
+
+        $content = file_get_contents($path);
+        $response = $this->buildResponse($content);
+
+        $response->header('Content-Disposition', 'attachment; filename="'.basename($filename).'"');
+
+        return $response;
+    }
+
+    /**
+     * Get the full image path from the filename.
+     *
+     * The route pattern permits "." and "/", so an unconstrained join would let
+     * "../../.env" escape the media roots and serve any file the process can read.
+     * Every candidate is therefore resolved and confirmed to sit inside its root.
+     */
+    protected function getImagePath(string $filename): string
+    {
+        $roots = array_merge(
+            array_map(fn ($path): string => (string) $path, config('imagecache.paths', [])),
+            [storage_path('app/public'), public_path(), public_path('storage')]
+        );
+
+        $relative = ltrim(str_replace('\\', '/', $filename), '/');
+
+        if (in_array('..', explode('/', $relative), true)) {
+            return '';
+        }
+
+        foreach ($roots as $root) {
+            $candidate = rtrim($root, '/').'/'.$relative;
+
+            if (! is_file($candidate)) {
+                continue;
+            }
+
+            $resolved = realpath($candidate);
+            $resolvedRoot = realpath($root);
+
+            if ($resolved === false || $resolvedRoot === false) {
+                continue;
+            }
+
+            if (str_starts_with($resolved, rtrim($resolvedRoot, '/').'/')) {
+                return $resolved;
+            }
+        }
+
+        return storage_path('app/public/'.$relative);
+    }
+
+    /**
+     * Get the template class or closure.
+     */
+    protected function getTemplate(string $template): mixed
+    {
+        $templates = config('imagecache.templates', []);
+
+        return $templates[$template] ?? null;
+    }
+
+    /**
+     * Build the HTTP response with the image content.
+     */
+    protected function buildResponse(string $content): Response
+    {
+        $mime = finfo_buffer(finfo_open(FILEINFO_MIME_TYPE), $content);
+        $eTag = md5($content);
+        $notModified = isset($_SERVER['HTTP_IF_NONE_MATCH']) && Request::server('HTTP_IF_NONE_MATCH') === $eTag;
+        $statusCode = $notModified ? 304 : 200;
+        $responseContent = $notModified ? null : $content;
+        $maxAge = ($this->template === 'logo' ? 10080 : (int) config('imagecache.lifetime', 43200)) * 60;
+
+        return new Response($responseContent, $statusCode, [
+            'Content-Type'   => $mime,
+            'Cache-Control'  => 'max-age='.$maxAge.', public',
+            'Content-Length' => strlen($content),
+            'Etag'           => $eTag,
+        ]);
+    }
+}

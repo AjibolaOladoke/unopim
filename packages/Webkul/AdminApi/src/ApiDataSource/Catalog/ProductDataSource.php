@@ -1,0 +1,393 @@
+<?php
+
+namespace Webkul\AdminApi\ApiDataSource\Catalog;
+
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
+use Webkul\AdminApi\ApiDataSource;
+use Webkul\Attribute\Repositories\AttributeFamilyRepository;
+use Webkul\Completeness\Repositories\ProductCompletenessScoreRepository;
+use Webkul\Product\Contracts\VariantValueResolver;
+use Webkul\Product\Database\Eloquent\Builder;
+use Webkul\Product\Enums\ProductType;
+use Webkul\Product\Repositories\ProductAssociationRepository;
+use Webkul\Product\Repositories\ProductRepository;
+
+class ProductDataSource extends ApiDataSource
+{
+    /**
+     * Default sort column of datagrid.
+     *
+     * @var ?string
+     */
+    protected $sortColumn = 'products.id';
+
+    protected ?VariantValueResolver $variantValueResolver = null;
+
+    /**
+     * Create a new DataSource instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected ProductRepository $productRepository,
+        protected AttributeFamilyRepository $attributeFamilyRepository,
+        protected ProductCompletenessScoreRepository $productCompletenessScoreRepository,
+        protected ProductAssociationRepository $productAssociationRepository
+    ) {}
+
+    protected function variantValueResolver(): VariantValueResolver
+    {
+        return $this->variantValueResolver ??= app(VariantValueResolver::class);
+    }
+
+    /**
+     * Prepares the query builder for API requests.
+     *
+     * @return \Illuminate\Database\Query\Builder The query builder for the product repository.
+     */
+    public function prepareApiQueryBuilder()
+    {
+        [$queryBuilder] = $this->productRepository->queryBuilderFromDatabase([]);
+
+        $this->addFilter('sku', [
+            '=',
+            'IN',
+            'NOT IN',
+        ]);
+        $this->addFilter('status', ['=']);
+        $this->registerDateFilters();
+
+        return $queryBuilder;
+    }
+
+    /**
+     * Registers the delta-sync filters shared by every product listing endpoint.
+     */
+    protected function registerDateFilters(): void
+    {
+        $operators = ['>', '>=', '<', '<=', 'BETWEEN'];
+
+        $this->addFilter('updated_at', $operators, null, 'datetime');
+        $this->addFilter('created_at', $operators, null, 'datetime');
+    }
+
+    /**
+     * Format data for API response.
+     *
+     * @return array An array of formatted category field data.
+     *
+     * @throws \Exception If the paginator data is not in the expected format.
+     */
+    public function formatData(): array
+    {
+        $paginator = $this->paginator->toArray();
+
+        $withCompleteness = filter_var(request()->input('with_completeness', false), FILTER_VALIDATE_BOOLEAN);
+
+        $rows = $paginator['data'] ?? [];
+
+        $completenessByProduct = $withCompleteness
+            ? $this->completenessScoresByProduct(array_column($rows, 'id'))
+            : null;
+
+        $mergedValuesById = $this->variantValueResolver()->resolveBatch($rows);
+
+        return array_map(
+            fn ($item) => $this->normalizeProduct($item, $withCompleteness, $completenessByProduct, mergedValues: $mergedValuesById[$item['id']] ?? null),
+            $rows,
+        );
+    }
+
+    /**
+     * Get category field by its code.
+     *
+     * Always includes the `associations` block — one extra query per request, unlike
+     * the listing in `formatData()`, which omits it to avoid an N+1 query per row.
+     *
+     * @param  string  $code  The unique code of the category field.
+     * @return array An associative array containing the category field's code, status, and label.
+     *
+     * @throws ModelNotFoundException If a category field with the given code is not found.
+     */
+    public function getByCode(string $code)
+    {
+        $this->prepareForSingleData();
+
+        $requestedFilters = [
+            'sku' => [
+                [
+                    'operator' => '=',
+                    'value'    => $code,
+                ],
+            ],
+        ];
+
+        $this->queryBuilder = $this->processRequestedFilters($requestedFilters);
+        $product = $this->queryBuilder->first()?->toArray();
+
+        if (! $product) {
+            throw new ModelNotFoundException(
+                sprintf('Product with sku %s could not be found.', (string) $code)
+            );
+        }
+
+        $withCompleteness = filter_var(request()->input('with_completeness', false), FILTER_VALIDATE_BOOLEAN);
+
+        $mergedValues = $this->variantValueResolver()->resolveBatch([$product])[$product['id']] ?? null;
+
+        return $this->normalizeProduct($product, $withCompleteness, withAssociations: true, mergedValues: $mergedValues);
+    }
+
+    public function getSuperAttributes($data)
+    {
+        if (! isset($data['super_attributes'])) {
+            return [];
+        }
+
+        return array_map(function ($data) {
+            return $data['code'];
+        }, $data['super_attributes']);
+    }
+
+    /**
+     * Retrieves variant data for a product.
+     *
+     * @param  array  $data  The product data containing variant information.
+     * @param  array  $superAttributes  The super attributes of the product.
+     * @return array
+     */
+    public function getVariants(array $data, array $superAttributes)
+    {
+        if (! isset($data['variants'])) {
+            return [];
+        }
+
+        return array_map(function ($data) use ($superAttributes) {
+            $variantAttributes = $this->getVariantAttributeAndOption(array_intersect($superAttributes, array_keys($data['values']['common'])), $data['values']['common']);
+
+            return [
+                'sku'        => $data['sku'],
+                'attributes' => $variantAttributes,
+            ];
+        }, $data['variants'] ?? []);
+    }
+
+    /**
+     * Retrieves variant attribute and option data for a product.the product data. The retrieved attribute and option values are then stored in a new array.
+     *
+     * @param  array  $superAttributes  An array of super attribute codes.
+     * @param  array  $data  An array of product data containing variant information.
+     * @return array An array of variant attribute and option data.
+     */
+    public function getVariantAttributeAndOption(array $superAttributes, array $data)
+    {
+        $variantAttributues = [];
+        foreach ($superAttributes as $key => $value) {
+            $variantAttributues[$value] = $data[$value];
+        }
+
+        return $variantAttributues;
+    }
+
+    /**
+     * Applies the specified operator to the query builder based on the given column and value.
+     *
+     * @param  Builder  $scopeQueryBuilder  The query builder instance to apply the operator to.
+     * @param  string  $requestedColumn  The column to apply the operator to.
+     * @param  array  $value  The value and operator to apply.
+     * @return Builder The updated query builder instance.
+     */
+    public function operatorByFilter($scopeQueryBuilder, $requestedColumn, $value)
+    {
+        $filterTable = isset($this->fieldFiltersAndOperators[$requestedColumn]['filterTable']) ? $this->fieldFiltersAndOperators[$requestedColumn]['filterTable'].'.' : 'products.';
+
+        switch ($requestedColumn) {
+            case 'parent':
+                $scopeQueryBuilder->where($filterTable.'parent_id', $this->getParentIdByCode($scopeQueryBuilder, $value['value']));
+                break;
+            case 'family':
+                $scopeQueryBuilder = $this->filterByFamily($scopeQueryBuilder, $value['operator'], $value['value']);
+                break;
+            case 'categories':
+                $scopeQueryBuilder = $this->filterByCategories($scopeQueryBuilder, $value['operator'], $filterTable, $value['value']);
+                break;
+            case 'updated_at':
+            case 'created_at':
+                $scopeQueryBuilder = $this->applyComparisonFilter($scopeQueryBuilder, $filterTable.$requestedColumn, $value);
+                break;
+            default:
+                $scopeQueryBuilder->where($filterTable.$requestedColumn, $value['value']);
+                break;
+        }
+
+        return $scopeQueryBuilder;
+    }
+
+    /**
+     * Retrieves the ID of a product based on its code.
+     *
+     * The lookup must match a configurable product AND the given SKU: matching on type
+     * alone returns any configurable product and masks an invalid SKU.
+     *
+     * @return int|null
+     *
+     * @throws ModelNotFoundException If a product with the given code is not found.
+     */
+    protected function getParentIdByCode(Builder $queryBuilder, string $sku)
+    {
+        $parentQuery = clone $queryBuilder;
+        $parentQuery->where('products.sku', $sku)
+            ->where('products.type', ProductType::Configurable->value);
+        $parentId = $parentQuery->first()?->id;
+
+        if (! $parentId) {
+            throw new UnprocessableEntityHttpException(
+                sprintf('Parent filter value "%s" is not a valid configurable product SKU.', (string) $sku)
+            );
+        }
+
+        return $parentId;
+    }
+
+    /**
+     * Filters the product query builder by the attribute family code.
+     *
+     *
+     * @return Builder
+     */
+    protected function filterByFamily(Builder $scopeQueryBuilder, string $operator, array $code)
+    {
+        $scopeQueryBuilder->whereHas('attribute_family', function ($query) use ($operator, $code) {
+            if ($this->operators['IN_LIST'] == $operator) {
+                $query->whereIn('attribute_families.code', $code);
+            } else {
+                $query->whereNotIn('attribute_families.code', $code);
+            }
+
+            return $query;
+        });
+
+        return $scopeQueryBuilder;
+    }
+
+    /**
+     * Filters the product query builder by the category code.
+     *
+     * @return Builder
+     */
+    protected function filterByCategories(Builder $scopeQueryBuilder, string $operator, string $filterTable, array $value)
+    {
+        if ($this->operators['IN_LIST'] == $operator) {
+            $scopeQueryBuilder->whereJsonContains($filterTable.'values->categories', $value);
+        } else {
+            $scopeQueryBuilder->whereJsonDoesntContain($filterTable.'values->categories', $value);
+        }
+
+        return $scopeQueryBuilder;
+    }
+
+    /**
+     * Normalize product data for API response
+     */
+    /**
+     * @param  array<string, list<array<string, mixed>>>|null  $completenessByProduct
+     * @param  array|null  $mergedValues  This row's `values`, already merged with its
+     *                                    ancestor chain by `VariantValueResolver::resolveBatch()`.
+     *                                    Falls back to the row's own `values` when absent
+     *                                    (e.g. a row with no parent).
+     */
+    protected function normalizeProduct(array $product, bool $withCompleteness = false, ?array $completenessByProduct = null, bool $withAssociations = false, ?array $mergedValues = null): array
+    {
+        $responseData = [
+            'sku'        => $product['sku'],
+            'status'     => (bool) $product['status'],
+            'parent'     => $product['parent']['sku'] ?? null,
+            'family'     => $product['attribute_family']['code'],
+            'type'       => $product['type'],
+            'additional' => $product['additional'],
+            'created_at' => $product['created_at'],
+            'updated_at' => $product['updated_at'],
+            'values'     => $mergedValues ?? $product['values'],
+        ];
+
+        if (in_array($product['type'], ProductType::VARIANT_PARENT_VALUES, true)) {
+            $superAttributes = $this->getSuperAttributes($product);
+
+            $responseData['super_attributes'] = $superAttributes;
+            $responseData['variants'] = $this->getVariants($product, $superAttributes);
+        }
+
+        if ($withCompleteness) {
+            $responseData['completeness'] = $completenessByProduct !== null
+                ? ($completenessByProduct[$product['id']] ?? [])
+                : $this->getCompletenessScores($product['id']);
+        }
+
+        if ($withAssociations) {
+            $responseData['associations'] = $this->getAssociationsForProduct($product['id']);
+        }
+
+        return $responseData;
+    }
+
+    /**
+     * Builds the `associations` response block: every link across ALL association
+     * types (legacy sections and custom types alike), grouped by type `code`, each
+     * carrying the related product's `sku` and the link's `additional_data` — the
+     * per-link data the legacy flat SKU lists cannot carry. Purely additive.
+     *
+     * @return array<string, array<int, array{related_sku: ?string, additional_data: ?array}>>
+     */
+    protected function getAssociationsForProduct(int $productId): array
+    {
+        $links = $this->productAssociationRepository->getLinksForProduct($productId);
+
+        $grouped = [];
+
+        foreach ($links as $link) {
+            $typeCode = $link->associationType?->code;
+
+            if (! $typeCode) {
+                continue;
+            }
+
+            $grouped[$typeCode][] = [
+                'related_sku'     => $link->relatedProduct?->sku,
+                'additional_data' => $link->additional_data,
+            ];
+        }
+
+        return $grouped;
+    }
+
+    protected function getCompletenessScores(string $id): array
+    {
+        return $this->completenessScoresByProduct([$id])[$id] ?? [];
+    }
+
+    /**
+     * Batch-load completeness scores for a set of products, grouped by product id,
+     * so a paginated list does not run one query per row.
+     *
+     * @param  array<int, int|string>  $ids
+     * @return array<string, list<array<string, mixed>>>
+     */
+    protected function completenessScoresByProduct(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        return $this->productCompletenessScoreRepository
+            ->findWhereIn('product_id', $ids)
+            ->load(['channel:id,code', 'locale:id,code'])
+            ->groupBy('product_id')
+            ->map(fn ($scores): array => $scores->map(fn ($completeness): array => [
+                'channel' => $completeness->channel->code,
+                'locale'  => $completeness->locale->code,
+                'score'   => $completeness->score,
+            ])->values()->all())
+            ->all();
+    }
+}

@@ -1,0 +1,426 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Settings;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Settings\UserDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\UserForm;
+use Webkul\Core\Filesystem\FileStorer;
+use Webkul\User\Models\Role;
+use Webkul\User\Repositories\AdminRepository;
+use Webkul\User\Repositories\RoleRepository;
+
+class UserController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected AdminRepository $adminRepository,
+        protected RoleRepository $roleRepository,
+        protected FileStorer $fileStorer
+    ) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(UserDataGrid::class)->toJson();
+        }
+
+        $roles = $this->assignableRoles();
+
+        return view('admin::settings.users.index', compact('roles'));
+    }
+
+    /**
+     * Whether the acting admin is forbidden from assigning the given role.
+     *
+     * A full-access admin may assign anything; anyone else is blocked from
+     * assigning an all-access role or any custom role carrying permissions they
+     * do not themselves hold.
+     */
+    protected function cannotAssignRole(?Role $targetRole): bool
+    {
+        return $this->roleAssignmentError($targetRole) !== null;
+    }
+
+    protected function roleAssignmentError(?Role $targetRole): ?string
+    {
+        if (! $targetRole) {
+            return null;
+        }
+
+        $actingRole = auth()->guard('admin')->user()->role;
+
+        if ($actingRole->permission_type === 'all') {
+            return null;
+        }
+
+        if ($targetRole->permission_type === 'all') {
+            return 'admin::app.settings.users.cannot-escalate-role';
+        }
+
+        if (array_diff($targetRole->permissions ?? [], $actingRole->permissions ?? [])) {
+            return 'admin::app.settings.users.cannot-assign-unheld-permissions';
+        }
+
+        return null;
+    }
+
+    /**
+     * @return Collection<int, Role>
+     */
+    protected function assignableRoles(?int $keepRoleId = null)
+    {
+        return $this->roleRepository->all()
+            ->filter(fn ($role): bool => (int) $role->id === $keepRoleId || ! $this->cannotAssignRole($role))
+            ->values();
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(UserForm $request): JsonResponse
+    {
+        $data = $request->only([
+            'name',
+            'email',
+            'password',
+            'password_confirmation',
+            'role_id',
+            'ui_locale_id',
+            'catalog_locale_id',
+            'default_channel_id',
+            'status',
+            'timezone',
+        ]);
+
+        $data['use_gravatar'] = $request->boolean('use_gravatar', true);
+
+        if ($error = $this->roleAssignmentError($this->roleRepository->find($data['role_id']))) {
+            return new JsonResponse([
+                'message' => trans($error),
+            ], JsonResponse::HTTP_FORBIDDEN);
+        }
+
+        if ($data['password'] ?? null) {
+            $data['password'] = bcrypt($data['password']);
+
+            $data['api_token'] = Str::random(80);
+        }
+
+        Event::dispatch('user.admin.create.before');
+
+        $admin = $this->adminRepository->create($data);
+
+        if (request()->hasFile('image')) {
+            $image = request()->file('image');
+            $image = is_array($image) ? current($image) : $image;
+            $extension = $image->guessExtension() ?: strtolower($image->getClientOriginalExtension());
+
+            $admin->image = $this->fileStorer->storeAs(
+                path: 'admins'.DIRECTORY_SEPARATOR.$admin->id,
+                name: Str::random(40).'.'.$extension,
+                file: $image,
+            );
+
+            $admin->save();
+        }
+
+        Event::dispatch('user.admin.create.after', $admin);
+
+        $response = ['message' => trans('admin::app.settings.users.create-success')];
+
+        if (bouncer()->hasPermission('settings.users.users.edit')) {
+            $response['redirect_url'] = route('admin.settings.users.edit', $admin->id);
+        }
+
+        return new JsonResponse($response);
+    }
+
+    /**
+     * User Details
+     *
+     * @param  int  $id
+     */
+    public function edit($id): View|JsonResponse
+    {
+        $user = $this->adminRepository->findOrFail($id);
+
+        if ($user->isApiUser()) {
+            abort(404);
+        }
+
+        $roles = $this->assignableRoles((int) $user->role_id);
+
+        $timezone = ['id' => $user?->timezone, 'label' => $user?->timezone];
+
+        if (! request()->expectsJson()) {
+            return view('admin::settings.users.edit', [
+                'user'                    => $user,
+                'roles'                   => $roles,
+                'canManage'               => true,
+                'isSelf'                  => $user->id === auth()->guard('admin')->id(),
+                'requiresCurrentPassword' => true,
+                'formId'                  => 'user-edit-form',
+                'formAction'              => route('admin.settings.users.update'),
+                'pageTitle'               => trans('admin::app.settings.users.edit.title'),
+                'backUrl'                 => route('admin.settings.users.index'),
+                'backLabel'               => trans('admin::app.settings.users.edit.back-btn'),
+                'saveLabel'               => trans('admin::app.settings.users.edit.save-btn'),
+            ]);
+        }
+
+        return new JsonResponse([
+            'roles'    => $roles,
+            'user'     => [
+                ...$user->toArray(),
+                'status' => (bool) $user->status,
+            ],
+            'timezone' => $timezone,
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(UserForm $request): JsonResponse
+    {
+        $id = request()->id;
+
+        $data = $this->prepareUserData($request, $id);
+
+        if ($data instanceof RedirectResponse) {
+            return new JsonResponse([
+                'message' => session('error', trans('admin::app.settings.users.cannot-change', ['name' => ''])),
+            ], JsonResponse::HTTP_FORBIDDEN);
+        }
+
+        Event::dispatch('user.admin.update.before', $id);
+
+        $admin = $this->adminRepository->update($data, $id);
+
+        if (request()->hasFile('image')) {
+            $image = request()->file('image');
+            $image = is_array($image) ? current($image) : $image;
+            $extension = $image->guessExtension() ?: strtolower($image->getClientOriginalExtension());
+
+            $admin->image = $this->fileStorer->storeAs(
+                path: 'admins'.DIRECTORY_SEPARATOR.$admin->id,
+                name: Str::random(40).'.'.$extension,
+                file: $image,
+            );
+        } else {
+            if (! request()->has('image') && $admin->image) {
+                Storage::delete($admin->image);
+                $admin->image = null;
+            }
+        }
+
+        $admin->save();
+
+        if (! empty($data['password'])) {
+            Event::dispatch('admin.password.update.after', $admin);
+        }
+
+        Event::dispatch('user.admin.update.after', $admin);
+
+        return new JsonResponse([
+            'message'      => trans('admin::app.settings.users.update-success'),
+            'redirect_url' => route('admin.settings.users.index'),
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     */
+    public function destroy($id): JsonResponse
+    {
+        $user = $this->adminRepository->findOrFail($id);
+
+        if ($user->isApiUser()) {
+            abort(404);
+        }
+
+        if ($this->adminRepository->count() == 1) {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.users.last-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if ($id == auth('admin')->user()->id) {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.users.current-user-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if (
+            $user->role?->permission_type === 'all'
+            && $this->adminRepository->countAdminsWithAllAccessAndActiveStatus() === 1
+        ) {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.users.last-all-access-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            Event::dispatch('user.admin.delete.before', $id);
+
+            $this->adminRepository->delete($id);
+
+            Event::dispatch('user.admin.delete.after', $id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.users.delete-success'),
+            ], JsonResponse::HTTP_OK);
+        } catch (\Exception $e) {
+            report($e);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.users.delete-failed'),
+        ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Show the form for confirming the user password.
+     *
+     * @param  int  $id
+     */
+    public function confirm($id): View
+    {
+        $user = $this->adminRepository->findOrFail($id);
+
+        return view('admin::customers.customers.confirm-password', compact('user'));
+    }
+
+    /**
+     * Destroy current after confirming.
+     */
+    public function destroySelf(): JsonResponse
+    {
+        $password = request()->input('password');
+
+        if (Hash::check($password, auth()->guard('admin')->user()->password)) {
+            if ($this->adminRepository->count() == 1) {
+                return new JsonResponse([
+                    'message' => trans('admin::app.settings.users.delete-last'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            } else {
+                $id = auth()->guard('admin')->user()->id;
+
+                Event::dispatch('user.admin.delete.before', $id);
+
+                $this->adminRepository->delete($id);
+
+                Event::dispatch('user.admin.delete.after', $id);
+
+                return new JsonResponse([
+                    'redirectUrl' => route('admin.session.create'),
+                    'message'     => trans('admin::app.settings.users.delete-success'),
+                ]);
+            }
+        } else {
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.users.incorrect-password'),
+            ], JsonResponse::HTTP_NOT_FOUND);
+        }
+    }
+
+    /**
+     * Prepare user data.
+     *
+     * @param  int  $id
+     * @return array|RedirectResponse
+     */
+    private function prepareUserData(UserForm $request, $id)
+    {
+        $data = $request->validated();
+
+        unset($data['current_password']);
+
+        $user = $this->adminRepository->find($id);
+
+        if ($user->isApiUser()) {
+            abort(404);
+        }
+
+        /**
+         * Password check.
+         */
+        if (! $data['password']) {
+            unset($data['password']);
+        } else {
+            $data['password'] = bcrypt($data['password']);
+        }
+
+        /**
+         * Is user with `permission_type` all changed status.
+         */
+        $data['status'] = filter_var($data['status'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+        $data['use_gravatar'] = $request->boolean('use_gravatar', true);
+
+        $isStatusChangedToInactive = ! $data['status'] && (bool) $user->status;
+
+        if (
+            $isStatusChangedToInactive
+            && (auth()->guard('admin')->user()->id === (int) $id
+                && $this->adminRepository->countAdminsWithAllAccessAndActiveStatus() === 1
+            )
+        ) {
+            return $this->cannotChangeRedirectResponse('status');
+        }
+
+        if ($this->cannotAssignRole($this->roleRepository->find($data['role_id'] ?? $user->role_id))) {
+            return $this->cannotChangeRedirectResponse('role');
+        }
+
+        /**
+         * Is user with `permission_type` all role changed.
+         */
+        $isRoleChanged = $user->role->permission_type === 'all'
+            && isset($data['role_id'])
+            && (int) $data['role_id'] !== $user->role_id;
+
+        if (
+            $isRoleChanged
+            && $this->adminRepository->countAdminsWithAllAccess() === 1
+        ) {
+            return $this->cannotChangeRedirectResponse('role');
+        }
+
+        unset($data['image']);
+
+        return $data;
+    }
+
+    /**
+     * Cannot change redirect response.
+     */
+    private function cannotChangeRedirectResponse(string $columnName): RedirectResponse
+    {
+        session()->flash('error', trans('admin::app.settings.users.cannot-change', [
+            'name' => $columnName,
+        ]));
+
+        return redirect()->route('admin.settings.users.index');
+    }
+}

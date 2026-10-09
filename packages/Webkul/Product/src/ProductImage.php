@@ -1,0 +1,135 @@
+<?php
+
+namespace Webkul\Product;
+
+use Illuminate\Support\Facades\Storage;
+use League\Flysystem\Local\LocalFilesystemAdapter;
+use Webkul\Product\Contracts\Product;
+use Webkul\Product\Repositories\ProductRepository;
+
+class ProductImage
+{
+    /**
+     * Create a new helper instance.
+     */
+    public function __construct(protected ProductRepository $productRepository) {}
+
+    /**
+     * Retrieve collection of gallery images.
+     *
+     * @param  Product  $product
+     * @return array
+     */
+    public function getGalleryImages($product)
+    {
+        if (! $product) {
+            return [];
+        }
+
+        $images = [];
+
+        foreach ($product->images as $image) {
+            if (! Storage::has($image->path)) {
+                continue;
+            }
+
+            $images[] = $this->getCachedImageUrls($image->path);
+        }
+
+        if (
+            ! $product->parent_id
+            && ! count($images)
+            && ! count($product->videos ?? [])
+        ) {
+            $images[] = $this->getFallbackImageUrls();
+        }
+
+        /*
+         * Product parent checked already above. If the case reached here that means the
+         * parent is available. So recursing the method for getting the parent image if
+         * images of the child are not found.
+         */
+        if ($images === []) {
+            return $this->getGalleryImages($product->parent);
+        }
+
+        return $images;
+    }
+
+    /**
+     * This method will first check whether the gallery images are already
+     * present or not. If not then it will load from the product.
+     *
+     * @param  Product  $product
+     * @return array|void
+     */
+    public function getProductBaseImage($product, ?array $galleryImages = null)
+    {
+        if (! $product) {
+            return;
+        }
+
+        return $galleryImages
+            ? $galleryImages[0]
+            : $this->otherwiseLoadFromProduct($product);
+    }
+
+    /**
+     * Load product's base image.
+     *
+     * @param  Product  $product
+     */
+    protected function otherwiseLoadFromProduct($product): array
+    {
+        $images = $product?->images;
+
+        return $images && $images->count()
+            ? $this->getCachedImageUrls($images[0]->path)
+            : $this->getFallbackImageUrls();
+    }
+
+    /**
+     * Get cached urls configured for intervention package.
+     *
+     * @param  string  $path
+     */
+    private function getCachedImageUrls($path): array
+    {
+        if (! $this->isDriverLocal()) {
+            return [
+                'small_image_url'    => Storage::url($path),
+                'medium_image_url'   => Storage::url($path),
+                'large_image_url'    => Storage::url($path),
+                'original_image_url' => Storage::url($path),
+            ];
+        }
+
+        return [
+            'small_image_url'    => url('cache/small/'.$path),
+            'medium_image_url'   => url('cache/medium/'.$path),
+            'large_image_url'    => url('cache/large/'.$path),
+            'original_image_url' => url('cache/original/'.$path),
+        ];
+    }
+
+    /**
+     * Get fallback urls.
+     */
+    private function getFallbackImageUrls(): array
+    {
+        return [
+            'small_image_url'    => unopim_asset('images/small-product-placeholder.webp'),
+            'medium_image_url'   => unopim_asset('images/medium-product-placeholder.webp'),
+            'large_image_url'    => unopim_asset('images/large-product-placeholder.webp'),
+            'original_image_url' => unopim_asset('images/large-product-placeholder.webp'),
+        ];
+    }
+
+    /**
+     * Is driver local.
+     */
+    private function isDriverLocal(): bool
+    {
+        return Storage::getAdapter() instanceof LocalFilesystemAdapter;
+    }
+}

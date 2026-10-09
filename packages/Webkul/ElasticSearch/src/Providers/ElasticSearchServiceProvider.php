@@ -1,0 +1,55 @@
+<?php
+
+namespace Webkul\ElasticSearch\Providers;
+
+use Illuminate\Support\ServiceProvider;
+use Webkul\Category\Models\Category as Categories;
+use Webkul\ElasticSearch\Console\Command\CategoryIndexer;
+use Webkul\ElasticSearch\Console\Command\ProductIndexer;
+use Webkul\ElasticSearch\Console\Command\Reindexer;
+use Webkul\ElasticSearch\ElasticSearchQuery;
+use Webkul\ElasticSearch\Observers\Category;
+use Webkul\ElasticSearch\Observers\Product;
+use Webkul\Product\Models\Product as Products;
+
+class ElasticSearchServiceProvider extends ServiceProvider
+{
+    /**
+     * Bootstrap the application events.
+     */
+    public function boot(): void
+    {
+        Products::observe(Product::class);
+        Categories::observe(Category::class);
+    }
+
+    /**
+     * Register the service provider
+     */
+    public function register(): void
+    {
+        $this->registerCommands();
+        $this->registerFacades();
+    }
+
+    /**
+     * Register the Installer Commands of this package.
+     */
+    protected function registerCommands(): void
+    {
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                ProductIndexer::class,
+                CategoryIndexer::class,
+                Reindexer::class,
+            ]);
+        }
+    }
+
+    public function registerFacades(): void
+    {
+        $this->app->bind(ElasticSearchQuery::class);
+
+        $this->app->singleton('elastic-search-query', fn ($app): ElasticSearchQuery => new ElasticSearchQuery);
+    }
+}

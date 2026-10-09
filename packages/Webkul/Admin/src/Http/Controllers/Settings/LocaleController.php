@@ -1,0 +1,223 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Settings;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Settings\LocalesDataGrid;
+use Webkul\Admin\Helpers\MassActionCounter;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\LocaleForm;
+use Webkul\Admin\Http\Requests\SelectableMassDestroyRequest;
+use Webkul\Admin\Http\Requests\SelectableMassUpdateRequest;
+use Webkul\Core\Repositories\LocaleRepository;
+
+class LocaleController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(protected LocaleRepository $localeRepository) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(LocalesDataGrid::class)->toJson();
+        }
+
+        return view('admin::settings.locales.index');
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(LocaleForm $request): JsonResponse
+    {
+        $this->localeRepository->create(request()->only([
+            'code',
+            'status',
+        ]));
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.locales.index.create-success'),
+        ]);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(int $id): View|JsonResponse
+    {
+        $locale = $this->localeRepository->findOrFail($id);
+
+        if (! request()->expectsJson()) {
+            return view('admin::settings.locales.edit', compact('locale'));
+        }
+
+        return new JsonResponse([
+            'data' => [
+                ...$locale->toArray(),
+                'status' => (bool) $locale->status,
+            ],
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(LocaleForm $request): JsonResponse
+    {
+        if (! request()->status && $this->localeRepository->checkLocaleBeingUsed(request()->id)) {
+            return new JsonResponse([
+                'errors' => [
+                    'status' => trans('admin::app.settings.locales.index.can-not-disable-error'),
+                ],
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $this->localeRepository->update(request()->only([
+            'status',
+        ]), request()->id);
+
+        return new JsonResponse([
+            'message'      => trans('admin::app.settings.locales.index.update-success'),
+            'redirect_url' => route('admin.settings.locales.index'),
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $id): JsonResponse
+    {
+        $locale = $this->localeRepository->findOrFail($id);
+
+        if ($locale->count() == 1) {
+            return response()->json([
+                'message' => trans('admin::app.settings.locales.index.last-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if ($locale->isLocaleBeingUsed()) {
+            return response()->json([
+                'message' => trans('admin::app.settings.locales.index.can-not-delete-error'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $locale->delete($id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.locales.index.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => trans('admin::app.settings.locales.index.delete-failed'),
+            ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Mass delete locales from the locale datagrid
+     */
+    public function massDestroy(SelectableMassDestroyRequest $massDestroyRequest): JsonResponse
+    {
+        $localeIds = $massDestroyRequest->selectedIds(LocalesDataGrid::class);
+
+        $counter = new MassActionCounter;
+
+        foreach ($localeIds as $localeId) {
+            $locale = $this->localeRepository->find($localeId);
+
+            if (! $locale) {
+                continue;
+            }
+
+            if ($locale->count() == 1) {
+                return new JsonResponse([
+                    'message' => trans('admin::app.settings.locales.index.last-delete-error'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            }
+
+            if ($locale->isLocaleBeingUsed()) {
+                $counter->skipped();
+
+                continue;
+            }
+
+            try {
+                $this->localeRepository->delete($localeId);
+
+                $counter->succeeded();
+            } catch (\Exception $e) {
+                report($e);
+
+                return new JsonResponse([
+                    'message' => $e->getMessage(),
+                ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        return $this->respondMassAction(
+            $counter,
+            'admin::app.settings.locales.index.can-not-delete-error',
+            'admin::app.settings.locales.index.partial-delete-success',
+            'admin::app.settings.locales.index.delete-success',
+            JsonResponse::HTTP_BAD_REQUEST,
+        );
+    }
+
+    /**
+     * Mass update locales status from the locale datagrid
+     */
+    public function massUpdate(SelectableMassUpdateRequest $massUpdateRequest): JsonResponse
+    {
+        $localeIds = $massUpdateRequest->selectedIds(LocalesDataGrid::class);
+
+        $value = (int) $massUpdateRequest->input('value');
+
+        $counter = new MassActionCounter;
+
+        foreach ($localeIds as $localeId) {
+            $locale = $this->localeRepository->find($localeId);
+
+            if (! $locale) {
+                continue;
+            }
+
+            if ($locale->isLocaleBeingUsed() && $value === 0) {
+                $counter->skipped();
+
+                continue;
+            }
+
+            try {
+                $locale->status = $value;
+
+                $locale->save();
+
+                $counter->succeeded();
+            } catch (\Exception $e) {
+                report($e);
+
+                return new JsonResponse([
+                    'message' => $e->getMessage(),
+                ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        return $this->respondMassAction(
+            $counter,
+            'admin::app.settings.locales.index.can-not-disable-error',
+            'admin::app.settings.locales.index.partial-update-success',
+            'admin::app.settings.locales.index.update-success',
+        );
+    }
+}

@@ -1,0 +1,708 @@
+<x-admin::layouts>
+    <x-slot:title>
+        @lang('admin::app.configuration.platform.title')
+    </x-slot>
+
+    @php
+        $canCreatePlatform = bouncer()->hasPermission('ai-agent.platform.create');
+
+        $providerLabels = collect(\Webkul\MagicAI\Enums\AiProvider::cases())
+            ->mapWithKeys(fn ($provider) => [$provider->value => $provider->label()]);
+
+        $providerDefaultUrls = collect(\Webkul\MagicAI\Enums\AiProvider::cases())
+            ->mapWithKeys(fn ($provider) => [$provider->value => $provider->defaultUrl()]);
+    @endphp
+
+    <v-magic-ai-platform>
+        <x-admin::page-header :title="trans('admin::app.configuration.platform.title')">
+            <x-slot:actions>
+                @if ($canCreatePlatform)
+                    <button type="button" class="primary-button">
+                        @lang('admin::app.configuration.platform.create-btn')
+                    </button>
+                @endif
+            </x-slot>
+        </x-admin::page-header>
+        <x-admin::shimmer.datagrid />
+    </v-magic-ai-platform>
+
+    @pushOnce('scripts')
+        <script type="text/x-template" id="v-magic-ai-platform-template">
+            <x-admin::page-header :title="trans('admin::app.configuration.platform.title')">
+                @if ($canCreatePlatform)
+                    <x-slot:actions>
+                        <button type="button" class="primary-button" @click="openCreateModal()">
+                            @lang('admin::app.configuration.platform.create-btn')
+                        </button>
+                    </x-slot>
+                @endif
+            </x-admin::page-header>
+
+            <!-- Setup Guide Banner (no platforms configured) -->
+                <div
+                    v-if="platformCount === 0"
+                    class="mt-4 p-6 bg-gradient-to-r from-primary-50 to-blue-50 dark:from-cherry-900 dark:to-cherry-800 rounded-lg border border-primary-200 dark:border-cherry-700"
+                >
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0 w-12 h-12 bg-primary-100 dark:bg-primary-900 rounded-lg flex items-center justify-center">
+                            <span class="text-2xl" role="img" aria-label="@lang('admin::app.configuration.platform.setup.lightning-icon')" title="@lang('admin::app.configuration.platform.setup.lightning-icon')">&#9889;</span>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-lg font-semibold text-gray-800 dark:text-slate-50 mb-1">
+                                @lang('admin::app.configuration.platform.setup.title')
+                            </h3>
+                            <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                                @lang('admin::app.configuration.platform.setup.description')
+                            </p>
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <span class="flex-shrink-0 w-6 h-6 bg-primary-200 dark:bg-primary-800 rounded-full flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">1</span>
+                                    @lang('admin::app.configuration.platform.setup.step-1')
+                                </div>
+                                <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <span class="flex-shrink-0 w-6 h-6 bg-primary-200 dark:bg-primary-800 rounded-full flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">2</span>
+                                    @lang('admin::app.configuration.platform.setup.step-2')
+                                </div>
+                                <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <span class="flex-shrink-0 w-6 h-6 bg-primary-200 dark:bg-primary-800 rounded-full flex items-center justify-center text-xs font-bold text-primary-700 dark:text-primary-200">3</span>
+                                    @lang('admin::app.configuration.platform.setup.step-3')
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                class="mt-4 primary-button"
+                                @click="openCreateModal()"
+                            >
+                                @lang('admin::app.configuration.platform.setup.add-first')
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+            <!-- Warning: No default platform -->
+                <div
+                    v-if="platformCount > 0 && ! hasOtherDefault"
+                    class="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700 flex items-center gap-3"
+                >
+                    <span class="text-xl" role="img" aria-label="@lang('admin::app.configuration.platform.setup.warning-icon')" title="@lang('admin::app.configuration.platform.setup.warning-icon')">&#9888;</span>
+                    <p class="text-sm text-amber-800 dark:text-amber-200">
+                        @lang('admin::app.configuration.platform.setup.no-default-warning')
+                    </p>
+                </div>
+
+            <!-- DataGrid -->
+            <x-admin::datagrid src="{{ route('admin.magic_ai.platform.index') }}" ref="datagrid">
+                <template #body="{ columns, records, performAction }">
+                    <div
+                        v-for="record in records"
+                        :key="record.id"
+                        class="row grid gap-2.5 items-center px-4 py-4 border-b dark:border-cherry-800 text-gray-600 dark:text-gray-300 transition-all"
+                        :class="{'cursor-pointer hover:bg-primary-50 hover:bg-opacity-30 dark:hover:bg-cherry-800': record.actions.some(a => a.index === 'edit')}"
+                        :style="`grid-template-columns: repeat(${gridsCount}, minmax(0, 1fr))`"
+                        @click="editRow(record)"
+                    >
+                        <div class="flex items-center gap-2 min-w-0">
+                            <p v-text="record.label" class="truncate" :title="record.label"></p>
+
+                            <x-admin::badge variant="info" v-if="record.is_managed">
+                                @lang('admin::app.configuration.platform.managed-badge')
+                            </x-admin::badge>
+                        </div>
+                        <p v-html="record.provider"></p>
+                        <p v-text="record.models" class="truncate" :title="record.models"></p>
+                        <p v-html="record.is_default"></p>
+                        <p v-html="record.status"></p>
+                        <p v-text="record.created_at"></p>
+                        <div class="flex justify-end gap-1" @click.stop>
+                            <a @click="setAsDefault(record)" v-if="!record.is_default_raw" title="@lang('admin::app.configuration.platform.set-default')">
+                                <span class="icon-star cursor-pointer rounded-md p-1.5 text-2xl transition-all hover:bg-primary-100 dark:hover:bg-gray-800"></span>
+                            </a>
+                            <a v-if="record.actions.find(a => a.icon === 'icon-edit')" @click="editModal(record.actions.find(a => a.icon === 'icon-edit')?.url)" title="@lang('admin::app.configuration.platform.datagrid.edit')" aria-label="@lang('admin::app.configuration.platform.datagrid.edit')">
+                                <span class="icon-edit cursor-pointer rounded-md p-1.5 text-2xl transition-all hover:bg-primary-100 dark:hover:bg-gray-800"></span>
+                            </a>
+                            <a v-if="record.actions.find(a => a.icon === 'icon-delete')" @click="performAction(record.actions.find(a => a.icon === 'icon-delete'))" title="@lang('admin::app.configuration.platform.datagrid.delete')" aria-label="@lang('admin::app.configuration.platform.datagrid.delete')">
+                                <span class="icon-delete cursor-pointer rounded-md p-1.5 text-2xl transition-all hover:bg-primary-100 dark:hover:bg-gray-800"></span>
+                            </a>
+                        </div>
+                    </div>
+                </template>
+            </x-admin::datagrid>
+
+            <!-- Modal -->
+            <x-admin::form v-slot="{ meta, errors, handleSubmit }" as="div" ref="modalform">
+                <form @submit="handleSubmit($event, saveWithTest)" ref="platformForm">
+                    <x-admin::modal ref="platformModal">
+                        <x-slot:header>
+                            <div class="flex items-center gap-2">
+                                <span class="dark:text-slate-50 text-lg font-semibold">
+                                    @{{ isEditing ? '@lang('admin::app.configuration.platform.edit-title')' : '@lang('admin::app.configuration.platform.create-title')' }}
+                                </span>
+
+                                <x-admin::badge variant="info" v-if="form.is_managed">
+                                    @lang('admin::app.configuration.platform.managed-badge')
+                                </x-admin::badge>
+                            </div>
+                        </x-slot>
+
+                        <x-slot:content>
+                            <p v-if="form.is_managed" class="mb-4 text-sm text-gray-600 dark:text-gray-300">
+                                @lang('admin::app.configuration.platform.managed-note')
+                            </p>
+
+                            <x-admin::form.control-group.control type="hidden" name="id" v-model="form.id" />
+
+                            <!-- Provider -->
+                            <x-admin::form.control-group>
+                                <x-admin::form.control-group.label class="required">
+                                    @lang('admin::app.configuration.platform.fields.provider')
+                                </x-admin::form.control-group.label>
+                                @php
+                                    $providerOptions = collect(\Webkul\MagicAI\Enums\AiProvider::cases())
+                                        ->map(fn ($provider) => [
+                                            'id'    => $provider->value,
+                                            'label' => $provider->label(),
+                                        ])
+                                        ->values();
+                                @endphp
+
+                                <x-admin::form.control-group.control
+                                    type="select"
+                                    name="provider"
+                                    rules="required"
+                                    ::value="form.provider"
+                                    :label="trans('admin::app.configuration.platform.fields.provider')"
+                                    :placeholder="trans('admin::app.configuration.platform.fields.select-provider')"
+                                    :options="json_encode($providerOptions)"
+                                    track-by="id"
+                                    label-by="label"
+                                    ::disabled="form.is_managed"
+                                    @input="onProviderChange($event)"
+                                >
+                                </x-admin::form.control-group.control>
+                                <x-admin::form.control-group.error control-name="provider" />
+                            </x-admin::form.control-group>
+
+                            <template v-if="form.provider">
+                                <!-- Label -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.platform.fields.label')
+                                    </x-admin::form.control-group.label>
+                                    <div :class="{ 'pointer-events-none select-none opacity-70': form.is_managed }">
+                                        <x-admin::form.control-group.control
+                                            type="text"
+                                            name="label"
+                                            v-model="form.label"
+                                            rules="required"
+                                            :label="trans('admin::app.configuration.platform.fields.label')"
+                                            ::readonly="form.is_managed"
+                                        />
+                                    </div>
+                                    <x-admin::form.control-group.error control-name="label" />
+                                </x-admin::form.control-group>
+
+                                <!-- API URL -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label>
+                                        @lang('admin::app.configuration.platform.fields.api-url')
+                                    </x-admin::form.control-group.label>
+                                    <div :class="{ 'pointer-events-none select-none opacity-70': form.is_managed }">
+                                        <x-admin::form.control-group.control
+                                            type="text"
+                                            name="api_url"
+                                            v-model="form.api_url"
+                                            :label="trans('admin::app.configuration.platform.fields.api-url')"
+                                            ::readonly="form.is_managed"
+                                            @input="onApiUrlInput($event)"
+                                        />
+                                    </div>
+                                    <p class="mt-1 text-xs text-gray-500">@lang('admin::app.configuration.platform.fields.api-url-hint')</p>
+                                    <x-admin::form.control-group.error control-name="api_url" />
+                                </x-admin::form.control-group>
+
+                                <!-- API Key (not for Ollama) -->
+                                <x-admin::form.control-group v-if="form.provider !== 'ollama'">
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.platform.fields.api-key')
+                                    </x-admin::form.control-group.label>
+                                    <div :class="{ 'pointer-events-none select-none opacity-70': form.is_managed }">
+                                        <x-admin::form.control-group.control
+                                            type="password"
+                                            name="api_key"
+                                            v-model="form.api_key"
+                                            rules="required"
+                                            :label="trans('admin::app.configuration.platform.fields.api-key')"
+                                            ::readonly="form.is_managed"
+                                            @change="onApiKeyEntered()"
+                                            @input="onApiKeyInput($event)"
+                                        />
+                                    </div>
+                                    <p v-if="fetchingModels" class="mt-1 text-xs text-primary-600">@lang('admin::app.configuration.platform.fetching-models')...</p>
+                                    <x-admin::form.control-group.error control-name="api_key" />
+                                </x-admin::form.control-group>
+
+                                <!-- Azure-specific fields -->
+                                <template v-if="form.provider === 'azure'">
+                                    <x-admin::form.control-group>
+                                        <x-admin::form.control-group.label class="required">
+                                            @lang('admin::app.configuration.platform.fields.azure-deployment')
+                                        </x-admin::form.control-group.label>
+                                        <div :class="{ 'pointer-events-none select-none opacity-70': form.is_managed }">
+                                            <x-admin::form.control-group.control type="text" name="azure_deployment" v-model="form.azure_deployment" placeholder="gpt-4o" ::readonly="form.is_managed" />
+                                        </div>
+                                    </x-admin::form.control-group>
+                                    <x-admin::form.control-group>
+                                        <x-admin::form.control-group.label>
+                                            @lang('admin::app.configuration.platform.fields.azure-api-version')
+                                        </x-admin::form.control-group.label>
+                                        <div :class="{ 'pointer-events-none select-none opacity-70': form.is_managed }">
+                                            <x-admin::form.control-group.control type="text" name="azure_api_version" v-model="form.azure_api_version" placeholder="2024-10-21" ::readonly="form.is_managed" />
+                                        </div>
+                                    </x-admin::form.control-group>
+                                </template>
+
+                                <!-- Models Selection -->
+                                <x-admin::form.control-group>
+                                    <x-admin::form.control-group.label class="required">
+                                        @lang('admin::app.configuration.platform.fields.models')
+                                    </x-admin::form.control-group.label>
+
+                                    <div class="flex flex-wrap gap-2 mb-2" v-if="selectedModels.length">
+                                        <span
+                                            v-for="(model, index) in selectedModels"
+                                            :key="model"
+                                            class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-800 dark:bg-primary-900 dark:text-primary-200"
+                                        >
+                                            @{{ model }}
+                                            <button v-if="! form.is_managed" type="button" @click="removeModel(index)" class="hover:text-danger" :aria-label="'@lang('admin::app.configuration.platform.fields.remove-model')'.replace(':model', model)" :title="'@lang('admin::app.configuration.platform.fields.remove-model')'.replace(':model', model)">&times;</button>
+                                        </span>
+                                    </div>
+
+                                    <div v-if="fetchedModels.length && ! form.is_managed">
+                                        <input
+                                            type="text"
+                                            v-model="modelSearch"
+                                            placeholder="@lang('admin::app.configuration.platform.fields.search-models')"
+                                            class="w-full py-1.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 dark:bg-cherry-800 dark:border-cherry-800 mb-2"
+                                        />
+
+                                        <div class="grid grid-cols-2 gap-1 max-h-[200px] overflow-y-auto border rounded-md p-3 dark:border-cherry-800 mb-2">
+                                            <label
+                                                v-for="model in filteredModels"
+                                                :key="model"
+                                                class="flex items-center gap-2 cursor-pointer hover:bg-primary-50 dark:hover:bg-cherry-800 rounded px-2 py-1.5 text-sm"
+                                            >
+                                                <input type="checkbox" :value="model" v-model="selectedModels" class="text-primary-600 rounded" />
+                                                <span class="text-gray-700 dark:text-gray-300">@{{ model }}</span>
+                                            </label>
+
+                                            <p v-if="!filteredModels.length" class="col-span-2 text-xs text-gray-400 py-2 text-center">
+                                                @lang('admin::app.configuration.platform.fields.no-models-match')
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <span v-if="fetchError" class="text-xs text-red-500 block mb-2">@{{ fetchError }}</span>
+
+                                    <p v-if="!fetchedModels.length && !selectedModels.length && !fetchingModels" class="text-xs text-gray-400 mb-2">
+                                        @lang('admin::app.configuration.platform.fields.enter-key-to-fetch')
+                                    </p>
+
+                                    <div class="flex gap-2" v-if="! form.is_managed">
+                                        <input
+                                            type="text"
+                                            v-model="customModel"
+                                            @keyup.enter.prevent="addCustomModel()"
+                                            placeholder="@lang('admin::app.configuration.platform.fields.custom-model-placeholder')"
+                                            class="flex-1 py-1.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 dark:bg-cherry-800 dark:border-cherry-800"
+                                        />
+                                        <button type="button" @click="addCustomModel()" class="secondary-button">
+                                            + @lang('admin::app.configuration.platform.fields.add')
+                                        </button>
+                                    </div>
+
+                                    <input type="hidden" name="models" :value="selectedModels.join(',')" />
+                                    <x-admin::form.control-group.error control-name="models" />
+                                </x-admin::form.control-group>
+
+                                <!-- Default & Status -->
+                                <div class="grid grid-cols-2 gap-4">
+                                    <x-admin::form.control-group>
+                                        <x-admin::form.control-group.label>
+                                            @lang('admin::app.configuration.platform.fields.is-default')
+                                        </x-admin::form.control-group.label>
+                                        <input type="hidden" name="is_default" value="0" />
+                                        <x-admin::form.control-group.control type="switch" name="is_default" value="1" ::checked="form.is_default" />
+                                    </x-admin::form.control-group>
+
+                                    <x-admin::form.control-group>
+                                        <x-admin::form.control-group.label>
+                                            @lang('admin::app.configuration.platform.fields.status')
+                                        </x-admin::form.control-group.label>
+                                        <input type="hidden" name="status" value="0" />
+                                        <x-admin::form.control-group.control type="switch" name="status" value="1" ::checked="form.status" />
+                                    </x-admin::form.control-group>
+                                </div>
+                            </template>
+                        </x-slot>
+
+                        <x-slot:footer>
+                            <div class="flex gap-x-2.5 items-center">
+                                <button type="submit" class="primary-button" :disabled="saving">
+                                    <span v-if="saving">@lang('admin::app.configuration.platform.saving')...</span>
+                                    <span v-else>@lang('admin::app.configuration.platform.save-btn')</span>
+                                </button>
+                            </div>
+                        </x-slot>
+                    </x-admin::modal>
+                </form>
+            </x-admin::form>
+        </script>
+
+        <script type="module">
+            app.component('v-magic-ai-platform', {
+                template: '#v-magic-ai-platform-template',
+                data() {
+                    return {
+                        isEditing: false,
+                        saving: false,
+                        fetchingModels: false,
+                        fetchError: '',
+                        customModel: '',
+                        modelSearch: '',
+                        selectedModels: [],
+                        fetchedModels: [],
+                        hasOtherDefault: {{ $hasDefault ? 'true' : 'false' }},
+                        platformCount: {{ $platformCount }},
+                        form: {
+                            id: null,
+                            label: '',
+                            provider: '',
+                            api_url: '',
+                            api_key: '',
+                            azure_deployment: 'gpt-4o',
+                            azure_api_version: '2024-10-21',
+                            is_default: false,
+                            is_managed: false,
+                            status: true,
+                        },
+
+                        providerLabels: @json($providerLabels),
+
+                        providerDefaultUrls: @json($providerDefaultUrls),
+                    };
+                },
+
+                computed: {
+                    gridsCount() {
+                        let count = this.$refs.datagrid.available.columns.length;
+                        if (this.$refs.datagrid.available.actions.length) ++count;
+                        return count;
+                    },
+
+                    filteredModels() {
+                        if (!this.modelSearch.trim()) {
+                            return this.fetchedModels;
+                        }
+                        let search = this.modelSearch.toLowerCase().trim();
+                        return this.fetchedModels.filter(m => m.toLowerCase().includes(search));
+                    },
+
+                },
+
+                methods: {
+                    openCreateModal() {
+                        this.isEditing = false;
+                        this.resetForm();
+                        if (!this.hasOtherDefault) {
+                            this.form.is_default = true;
+                        }
+                        this.$refs.platformModal.toggle();
+                    },
+
+                    resetForm() {
+                        this.form = {
+                            id: null, label: '', provider: '', api_url: '', api_key: '',
+                            azure_deployment: 'gpt-4o', azure_api_version: '2024-10-21',
+                            is_default: false, is_managed: false, status: true,
+                        };
+                        this.selectedModels = [];
+                        this.fetchedModels = [];
+                        this.customModel = '';
+                        this.modelSearch = '';
+                        this.fetchError = '';
+                    },
+
+                    onProviderChange(value = null) {
+                        if (value !== null) {
+                            try {
+                                let selectedProvider = typeof value === 'string' ? JSON.parse(value) : value;
+
+                                this.form.provider = selectedProvider?.id ?? selectedProvider ?? '';
+                            } catch (error) {
+                                this.form.provider = value ?? '';
+                            }
+                        }
+
+                        if (!this.isEditing) {
+                            this.form.label = this.providerLabels[this.form.provider] || this.form.provider;
+                        }
+                        this.selectedModels = [];
+                        this.fetchedModels = [];
+                        this.form.api_url = this.providerDefaultUrls[this.form.provider] || '';
+                        this.fetchError = '';
+                    },
+
+                    onApiKeyEntered() {
+                        if (this.form.api_key && this.form.api_key.length >= 10 && !this.form.api_key.match(/^\*+$/)) {
+                            this.fetchModels();
+                        }
+                    },
+
+                    // Debounced auto-fetch so models load as soon as the user pastes/types an API key,
+                    // without waiting for a blur/change event (Issue #761).
+                    onApiKeyInput(event) {
+                        if (this._apiKeyInputTimer) {
+                            clearTimeout(this._apiKeyInputTimer);
+                        }
+                        this._apiKeyInputTimer = setTimeout(() => {
+                            this.onApiKeyEntered();
+                        }, 500);
+                    },
+
+                    onApiUrlEntered() {
+                        let url = (this.form.api_url || '').trim();
+
+                        if (! /^https?:\/\/[^\s\/]+/i.test(url)) {
+                            return;
+                        }
+
+                        let hasSavedKey = !! this.form.id;
+                        let hasTypedKey = this.form.api_key && this.form.api_key.length >= 10 && ! this.form.api_key.match(/^\*+$/);
+
+                        if (! hasSavedKey && ! hasTypedKey) {
+                            return;
+                        }
+
+                        this.fetchModels();
+                    },
+
+                    onApiUrlInput(event) {
+                        if (this._apiUrlInputTimer) {
+                            clearTimeout(this._apiUrlInputTimer);
+                        }
+
+                        this._apiUrlInputTimer = setTimeout(() => {
+                            this.onApiUrlEntered();
+                        }, 500);
+                    },
+
+                    fetchModels() {
+                        this.fetchingModels = true;
+                        this.fetchError = '';
+
+                        let requestedUrl = this.form.api_url || '';
+
+                        this.$axios.post("{{ route('admin.magic_ai.platform.fetch_models') }}", {
+                            provider: this.form.provider,
+                            api_key: this.form.api_key,
+                            api_url: requestedUrl || undefined,
+                            id: this.form.id || undefined,
+                        }).then((response) => {
+                            this.fetchingModels = false;
+                            let models = response.data.models || [];
+                            let recommended = response.data.recommended || [];
+                            this.fetchedModels = models;
+
+                            let urlUnchangedSinceRequest = this.form.api_url === requestedUrl;
+
+                            if (models.length && response.data.api_url && urlUnchangedSinceRequest) {
+                                this.form.api_url = response.data.api_url;
+                            }
+
+                            if (models.length && this.selectedModels.length === 0) {
+                                this.selectedModels = recommended.filter(m => models.includes(m));
+                            }
+
+                            if (!models.length) {
+                                this.fetchError = "@lang('admin::app.configuration.platform.errors.no-models-returned')";
+                            }
+                        }).catch(error => {
+                            this.fetchingModels = false;
+                            this.fetchError = error.response?.data?.message || "@lang('admin::app.configuration.platform.errors.fetch-failed')";
+                        });
+                    },
+
+                    addCustomModel() {
+                        let model = this.customModel.trim();
+
+                        if (! model) {
+                            return;
+                        }
+
+                        if (! /^[a-zA-Z0-9][a-zA-Z0-9\-._:\/@]+$/.test(model)) {
+                            this.$emitter.emit('add-flash', {
+                                type: 'error',
+                                message: '@lang("admin::app.configuration.platform.fields.invalid-model-name")',
+                            });
+                            return;
+                        }
+
+                        if (! this.selectedModels.includes(model)) {
+                            this.selectedModels.push(model);
+                        }
+
+                        this.customModel = '';
+                    },
+
+                    removeModel(index) {
+                        this.selectedModels.splice(index, 1);
+                    },
+
+                    async saveWithTest(params, { resetForm, setErrors }) {
+                        this.saving = true;
+                        let saveData = new FormData(this.$refs.platformForm);
+
+                        // The provider field is a custom multiselect component whose value lives in
+                        // this.form.provider, not in a native input. Make sure FormData carries it
+                        // so the backend's `provider` validation and the preflight test both see it.
+                        if (this.form.provider) {
+                            saveData.set('provider', this.form.provider);
+                        }
+
+                        // Ensure the selected models are always in the payload regardless of the hidden
+                        // input's DOM value (Vue :value binding can lag for dynamically-added checkboxes).
+                        saveData.set('models', this.selectedModels.join(','));
+
+                        if (this.form.provider === 'azure') {
+                            saveData.set('extras', JSON.stringify({
+                                deployment: this.form.azure_deployment,
+                                api_version: this.form.azure_api_version,
+                            }));
+                        }
+
+                        // Verify credentials with upstream before persisting (Issue #760).
+                        // Skip the test when the api_key is masked (user did not change it on update).
+                        const rawKey = this.form.api_key;
+                        const keyLooksMasked = typeof rawKey === 'string' && /^\*+$/.test(rawKey);
+                        if (!keyLooksMasked) {
+                            try {
+                                const testForm = new FormData();
+                                testForm.set('provider', this.form.provider || '');
+                                testForm.set('api_url', this.form.api_url || '');
+                                testForm.set('api_key', this.form.api_key || '');
+                                testForm.set('models', this.selectedModels.join(','));
+                                const testResponse = await this.$axios.post(
+                                    "{{ route('admin.magic_ai.platform.test') }}",
+                                    testForm
+                                );
+                                if (!testResponse.data?.success) {
+                                    throw testResponse;
+                                }
+                            } catch (testError) {
+                                this.saving = false;
+                                this.$emitter.emit('add-flash', {
+                                    type: 'error',
+                                    message: testError?.response?.data?.message
+                                        || testError?.data?.message
+                                        || "@lang('admin::app.configuration.platform.message.test-fail')",
+                                });
+                                return;
+                            }
+                        }
+
+                        let url;
+                        if (this.form.id) {
+                            saveData.append('_method', 'put');
+                            url = "{{ route('admin.magic_ai.platform.update', ':id') }}".replace(':id', this.form.id);
+                        } else {
+                            url = "{{ route('admin.magic_ai.platform.store') }}";
+                        }
+
+                        this.$axios.post(url, saveData)
+                            .then((response) => {
+                                this.saving = false;
+                                this.$refs.platformModal.close();
+                                this.$emitter.emit('add-flash', { type: 'success', message: response.data.message });
+                                this.$refs.datagrid.get();
+
+                                if (! this.isEditing) {
+                                    this.platformCount++;
+                                }
+
+                                if (this.form.is_default) {
+                                    this.hasOtherDefault = true;
+                                }
+
+                                resetForm();
+                            })
+                            .catch(error => {
+                                this.saving = false;
+                                if (error.response?.status == 422) {
+                                    const errors = error.response.data.errors ?? {};
+
+                                    setErrors(errors);
+
+                                    const firstError = Object.values(errors).flat()[0];
+
+                                    if (firstError) {
+                                        this.$emitter.emit('add-flash', { type: 'error', message: firstError });
+                                    }
+                                } else {
+                                    this.$emitter.emit('add-flash', {
+                                        type: 'error',
+                                        message: error.response?.data?.message || "@lang('admin::app.configuration.platform.errors.save-failed')",
+                                    });
+                                }
+                            });
+                    },
+
+                    editRow(record) {
+                        const action = record.actions.find(a => a.index === 'edit');
+
+                        if (! action) {
+                            return;
+                        }
+
+                        this.editModal(action.url);
+                    },
+
+                    editModal(url) {
+                        this.isEditing = true;
+                        this.$axios.get(url).then((response) => {
+                            let data = response.data.data;
+                            let extras = {};
+                            try {
+                                extras = data.extras ? (typeof data.extras === 'string' ? JSON.parse(data.extras) : data.extras) : {};
+                            } catch (e) { extras = {}; }
+
+                            this.form = {
+                                id: data.id, label: data.label, provider: data.provider,
+                                api_url: data.api_url || '', api_key: data.api_key || '',
+                                azure_deployment: extras.deployment || 'gpt-4o',
+                                azure_api_version: extras.api_version || '2024-10-21',
+                                is_default: data.is_default, is_managed: data.is_managed, status: data.status,
+                            };
+                            this.selectedModels = data.models ? data.models.split(',').map(m => m.trim()).filter(m => m) : [];
+                            this.fetchedModels = [];
+                            this.$refs.platformModal.toggle();
+                            this.fetchModels();
+                        });
+                    },
+
+                    setAsDefault(record) {
+                        this.$axios.post("{{ route('admin.magic_ai.platform.set_default', ':id') }}".replace(':id', record.id))
+                            .then((response) => {
+                                this.$emitter.emit('add-flash', { type: 'success', message: response.data.message });
+                                this.$refs.datagrid.get();
+                                this.hasOtherDefault = true;
+                            })
+                            .catch(error => {
+                                this.$emitter.emit('add-flash', { type: 'error', message: error.response?.data?.message || "@lang('admin::app.configuration.platform.errors.generic')" });
+                            });
+                    },
+                },
+            });
+        </script>
+    @endPushOnce
+</x-admin::layouts>

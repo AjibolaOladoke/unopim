@@ -1,0 +1,69 @@
+<?php
+
+namespace Webkul\Product\Builders;
+
+use Webkul\Attribute\Services\AttributeService;
+use Webkul\ElasticSearch\AbstractFilterableQueryBuilder as ElasticSearchAbstractFilterableQueryBuilder;
+use Webkul\ElasticSearch\ElasticSearchQuery;
+use Webkul\Product\Filter\FilterManager;
+use Webkul\Product\Traits\ProductQueryFilter;
+
+class ElasticProductQueryBuilder extends ElasticSearchAbstractFilterableQueryBuilder
+{
+    use ProductQueryFilter;
+
+    public function __construct(
+        protected AttributeService $attributeService,
+        protected FilterManager $filterManager,
+        ?ElasticSearchQuery $elasticSearchQuery = null,
+    ) {
+        parent::__construct($elasticSearchQuery);
+    }
+
+    /**
+     * Add a filter condition on an attribute
+     */
+    protected function addAttributeFilter(
+        $filter,
+        $attribute,
+        $operator,
+        $value,
+        array $context
+    ): static {
+        $locale = $attribute->value_per_locale ? ($context['locale'] ?? null) : null;
+        $channel = $attribute->value_per_channel ? ($context['channel'] ?? null) : null;
+
+        $filter->setQueryManager($this->elasticSearchQuery);
+
+        if (! $filter->isOperatorAllowed($operator)) {
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'Unsupported operator. Only "%s" are supported, but "%s" was given.',
+                    implode(',', array_map(fn ($allowOperator) => $allowOperator->value, $filter->getAllowedOperators())),
+                    $operator->value,
+                )
+            );
+        }
+
+        $filter->addAttributeFilter($attribute, $operator, $value, $locale, $channel, $context);
+
+        return $this;
+    }
+
+    /**
+     * Add a filter condition on an universal attribute
+     */
+    protected function applyUnfilteredFilter(
+        $filter,
+        $attribute,
+        $operator,
+        $value,
+        array $context
+    ): static {
+        $filter->setQueryManager($this->elasticSearchQuery);
+
+        $filter->applyUnfilteredFilter($attribute, $operator, $value, $context);
+
+        return $this;
+    }
+}

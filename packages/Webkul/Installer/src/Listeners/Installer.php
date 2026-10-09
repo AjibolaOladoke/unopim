@@ -1,0 +1,49 @@
+<?php
+
+namespace Webkul\Installer\Listeners;
+
+use GuzzleHttp\Client;
+use Webkul\User\Repositories\AdminRepository;
+
+class Installer
+{
+    /**
+     * Api endpoint
+     *
+     * @var string
+     */
+    protected const API_ENDPOINT = 'https://updates.unopim.com/api/updates';
+
+    /**
+     * Create a new listener instance.
+     */
+    public function __construct(protected AdminRepository $adminRepository) {}
+
+    /**
+     * After UnoPim is successfully installed
+     */
+    public function installed(): void
+    {
+        $admin = $this->adminRepository->first();
+
+        $httpClient = new Client;
+
+        try {
+            $httpClient->request('POST', self::API_ENDPOINT, [
+                'headers' => [
+                    'Accept' => 'application/json',
+                ],
+                'json'    => [
+                    'domain'       => config('app.url'),
+                    'email'        => $admin?->email,
+                    'name'         => $admin?->name,
+                    'country_code' => config('app.default_country', 'IN'),
+                ],
+            ]);
+        } catch (\Exception) {
+            /**
+             * Skip the error
+             */
+        }
+    }
+}

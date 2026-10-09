@@ -1,0 +1,104 @@
+<?php
+
+namespace Webkul\Core\Helpers\Database\Grammars;
+
+use Webkul\Core\Contracts\Database\Grammar;
+
+class MySQLGrammar implements Grammar
+{
+    public function groupConcat(
+        string $column,
+        ?string $alias = null,
+        ?string $orderBy = null,
+        bool $distinct = false,
+        string $separator = ', '
+    ): string {
+        $distinctSql = $distinct ? 'DISTINCT ' : '';
+
+        $orderBySql = $orderBy ? " ORDER BY {$orderBy} ASC" : '';
+
+        $expr = "GROUP_CONCAT({$distinctSql}{$column}{$orderBySql} SEPARATOR '{$separator}')";
+
+        return $alias ? "{$expr} AS {$alias}" : $expr;
+    }
+
+    public function concat(string ...$parts): string
+    {
+        $joined = implode(', ', $parts);
+
+        return "CONCAT({$joined})";
+    }
+
+    public function coalesce(array $columns, ?string $alias = null): string
+    {
+        $expr = 'COALESCE('.implode(', ', $columns).')';
+
+        return $alias ? "{$expr} AS {$alias}" : $expr;
+    }
+
+    public function length(string $column): string
+    {
+        return "CHAR_LENGTH({$column})";
+    }
+
+    public function castToText(string $column): string
+    {
+        return "CAST({$column} AS CHAR)";
+    }
+
+    public function jsonExtract(string $column, string ...$pathSegments): string
+    {
+        $segments = array_map($this->escapeJsonPathSegment(...), $pathSegments);
+
+        $jsonPath = '$.'.implode('.', $segments);
+
+        // Escape column name — handles both 'values' and 'table.values'
+        $parts = explode('.', $column);
+        $escaped = implode('.', array_map(fn ($p): string => "`{$p}`", $parts));
+
+        return "JSON_UNQUOTE(JSON_EXTRACT({$escaped}, '{$jsonPath}'))";
+    }
+
+    public function jsonContains(string $column, array $pathSegments, string $value): string
+    {
+        $parts = explode('.', $column);
+        $escaped = implode('.', array_map(fn ($p): string => "`{$p}`", $parts));
+        $jsonPath = '$.'.implode('.', array_map($this->escapeJsonPathSegment(...), $pathSegments));
+
+        return "JSON_CONTAINS(JSON_EXTRACT({$escaped}, '{$jsonPath}'), {$value})";
+    }
+
+    /**
+     * Escape a JSON path segment so it cannot break out of the single-quoted
+     * SQL string literal the path is embedded in (SQL injection guard).
+     *
+     * MySQL only accepts a bare path member that looks like an identifier;
+     * anything else (a leading digit, a hyphen, a space) must be wrapped in
+     * double quotes or the server rejects the whole path with error 3143.
+     */
+    protected function escapeJsonPathSegment(string $segment): string
+    {
+        if (! preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $segment)) {
+            $segment = '"'.str_replace(['\\', '"'], ['\\\\', '\\"'], $segment).'"';
+        }
+
+        return str_replace(['\\', "'"], ['\\\\', "''"], $segment);
+    }
+
+    public function orderByField(string $column, array $ids, string $type = ''): string
+    {
+        $idList = implode(',', $ids);
+
+        return "FIELD({$column}, {$idList})";
+    }
+
+    public function getRegexOperator(): string
+    {
+        return 'REGEXP';
+    }
+
+    public function getBooleanValue(mixed $value): int
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+    }
+}

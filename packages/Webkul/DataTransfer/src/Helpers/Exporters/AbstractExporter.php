@@ -1,0 +1,645 @@
+<?php
+
+namespace Webkul\DataTransfer\Helpers\Exporters;
+
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\Storage;
+use Psr\Log\LoggerInterface;
+use Webkul\Core\Eloquent\Repository as SourceRepository;
+use Webkul\DataTransfer\Buffer\FileBuffer;
+use Webkul\DataTransfer\Contracts\JobTrack as ExportJobTrackContract;
+use Webkul\DataTransfer\Contracts\JobTrackBatch;
+use Webkul\DataTransfer\Contracts\JobTrackBatch as JobTrackBatchContract;
+use Webkul\DataTransfer\Helpers\Concerns\TracksJobHeartbeat;
+use Webkul\DataTransfer\Helpers\Error;
+use Webkul\DataTransfer\Jobs\Export\Completed as CompletedJob;
+use Webkul\DataTransfer\Jobs\Export\ExportBatch as ExportBatchJob;
+use Webkul\DataTransfer\Jobs\Export\File\FlatItemBuffer as FileExportFileBuffer;
+use Webkul\DataTransfer\Jobs\Export\File\JSONFileBuffer;
+use Webkul\DataTransfer\Jobs\Export\File\SpoutWriterFactory;
+use Webkul\DataTransfer\Repositories\JobTrackBatchRepository;
+use Webkul\User\Models\AdminProxy;
+
+abstract class AbstractExporter
+{
+    use TracksJobHeartbeat;
+
+    /**
+     * Error code for system exception.
+     */
+    public const ERROR_CODE_SYSTEM_EXCEPTION = 'system_exception';
+
+    /**
+     * Error code for column not found.
+     */
+    public const ERROR_CODE_COLUMN_NOT_FOUND = 'column_not_found';
+
+    /**
+     * Error code for column empty header.
+     */
+    public const ERROR_CODE_COLUMN_EMPTY_HEADER = 'column_empty_header';
+
+    /**
+     * Error code for column name invalid.
+     */
+    public const ERROR_CODE_COLUMN_NAME_INVALID = 'column_name_invalid';
+
+    /**
+     * Error code for invalid attribute.
+     */
+    public const ERROR_CODE_INVALID_ATTRIBUTE = 'invalid_attribute_name';
+
+    /**
+     * Error code for wrong quotes.
+     */
+    public const ERROR_CODE_WRONG_QUOTES = 'wrong_quotes';
+
+    /**
+     * Error code for wrong columns number.
+     */
+    public const ERROR_CODE_COLUMNS_NUMBER = 'wrong_columns_number';
+
+    /**
+     * Error message templates.
+     */
+    protected array $errorMessages = [
+        self::ERROR_CODE_SYSTEM_EXCEPTION    => 'data_transfer::app.validation.errors.system',
+        self::ERROR_CODE_COLUMN_NOT_FOUND    => 'data_transfer::app.validation.errors.column-not-found',
+        self::ERROR_CODE_COLUMN_EMPTY_HEADER => 'data_transfer::app.validation.errors.column-empty-headers',
+        self::ERROR_CODE_COLUMN_NAME_INVALID => 'data_transfer::app.validation.errors.column-name-invalid',
+        self::ERROR_CODE_INVALID_ATTRIBUTE   => 'data_transfer::app.validation.errors.invalid-attribute',
+        self::ERROR_CODE_WRONG_QUOTES        => 'data_transfer::app.validation.errors.wrong-quotes',
+        self::ERROR_CODE_COLUMNS_NUMBER      => 'data_transfer::app.validation.errors.column-numbers',
+    ];
+
+    public const BATCH_SIZE = 1000;
+
+    protected const ESTIMATED_BYTES_PER_CELL = 32;
+
+    protected const MAX_DISK_USAGE_RATIO = 0.8;
+
+    /**
+     * Is linking required
+     */
+    protected bool $linkingRequired = false;
+
+    /**
+     * Is indexing required
+     */
+    protected bool $indexingRequired = false;
+
+    /**
+     * Error helper instance.
+     *
+     * @var Error
+     */
+    protected $errorHelper;
+
+    /**
+     * export instance.
+     */
+    protected ExportJobTrackContract $export;
+
+    /**
+     * Source repository instance.
+     *
+     * @var SourceRepository
+     */
+    protected $source;
+
+    /**
+     * Valid column names
+     */
+    protected array $validColumnNames = [];
+
+    /**
+     * Array of numbers of validated rows as keys and boolean TRUE as values
+     */
+    protected array $validatedRows = [];
+
+    /**
+     * Number of rows processed by validation
+     */
+    protected int $processedRowsCount = 0;
+
+    /**
+     * Number of created items
+     */
+    protected int $createdItemsCount = 0;
+
+    /**
+     * Number of updated items
+     */
+    protected int $updatedItemsCount = 0;
+
+    /**
+     * Number of skipped items
+     */
+    protected int $skippedItemsCount = 0;
+
+    /**
+     * Filters
+     */
+    protected array $filters = [];
+
+    /**
+     * For exporting file
+     */
+    protected bool $exportsFile = true;
+
+    /**
+     * For job specific log file
+     */
+    protected $jobLogger;
+
+    /**
+     * The name of the queue the job should be sent to.
+     *
+     * @var string|null
+     */
+    public $queue;
+
+    protected $exportBuffer;
+
+    /**
+     * Create a new instance.
+     */
+    public function __construct(
+        protected JobTrackBatchRepository $exportBatchRepository,
+        protected FileExportFileBuffer $exportFileBuffer
+    ) {}
+
+    /**
+     * Validate data row
+     */
+    // abstract public function validateRow(array $rowData, int $rowNumber): bool;
+
+    /**
+     * export data rows
+     */
+    abstract public function exportBatch(JobTrackBatchContract $exportBatchContract, $filePath): bool;
+
+    /**
+     * Initialize Product error messages
+     */
+    protected function initErrorMessages(): void
+    {
+        foreach ($this->errorMessages as $errorCode => $message) {
+            $this->errorHelper->addErrorMessage($errorCode, trans($message));
+        }
+    }
+
+    /**
+     * Initializes for the export process.
+     *
+     * @return void
+     */
+    public function initilize() {}
+
+    /**
+     * export instance.
+     */
+    public function setExport(ExportJobTrackContract $export): self
+    {
+        $this->export = $export;
+
+        return $this;
+    }
+
+    /**
+     * Set logger instance
+     */
+    public function setLogger(LoggerInterface $logger): self
+    {
+        $this->jobLogger = $logger;
+
+        return $this;
+    }
+
+    /**
+     * Get logger instance for this job
+     */
+    public function getLogger(): LoggerInterface
+    {
+        return $this->jobLogger;
+    }
+
+    public function getExportParameter(): array
+    {
+        $filters = $this->getFilters();
+
+        return [
+            'fieldDelimiter' => $this->export->jobInstance['field_separator'] ?? ',',
+            'fieldEnclosure' => '"',
+            'shouldAddBOM'   => false,
+            'type'           => $filters['file_format'] ?? SpoutWriterFactory::CSV,
+            'writeHeaders'   => ($filters['header_row'] ?? '1') !== '0',
+            'headerLabels'   => $this->getHeaderLabels(),
+        ];
+    }
+
+    protected function getHeaderLabels(): array
+    {
+        return [];
+    }
+
+    /**
+     * BufferFile instance.
+     */
+    public function setExportBuffer($exportBuffer): self
+    {
+        $this->exportBuffer = $exportBuffer;
+
+        return $this;
+    }
+
+    /**
+     * BufferFile instance.
+     */
+    public function getBufferFile()
+    {
+        return $this->exportFileBuffer;
+    }
+
+    /**
+     * Source repository instance.
+     *
+     * @param  SourceRepository  $source
+     */
+    public function setSource($source)
+    {
+        $this->source = $source;
+
+        return $this;
+    }
+
+    /**
+     * export instance.
+     *
+     * @param  Error  $errorHelper
+     */
+    public function setErrorHelper($errorHelper): self
+    {
+        $this->errorHelper = $errorHelper;
+
+        $this->initErrorMessages();
+
+        return $this;
+    }
+
+    /**
+     * Source repository instance.
+     *
+     * @return SourceRepository
+     */
+    public function getSource()
+    {
+        return $this->source;
+    }
+
+    public function getFilters()
+    {
+        if ($this->filters === []) {
+            $this->filters = $this->export->jobInstance->filters ?? [];
+        }
+
+        return $this->filters;
+    }
+
+    protected function getResults()
+    {
+        return $this->source->all()?->getIterator();
+    }
+
+    /**
+     * Get filename for generate data
+     */
+    public function getFileName(): string
+    {
+        $filters = $this->getFilters();
+
+        $extension = strtolower($filters['file_format'] ?? SpoutWriterFactory::CSV);
+
+        $base = $this->resolveFileNamePattern($filters['file_path'] ?? null);
+
+        if ($base === '') {
+            $base = sprintf('%s-%s', $this->export->jobInstance->code, $this->export->jobInstance->entity_type);
+        }
+
+        return sprintf('%s.%s', $base, $extension);
+    }
+
+    protected function resolveFileNamePattern(?string $pattern): string
+    {
+        if (in_array($pattern, [null, '', '0'], true)) {
+            return '';
+        }
+
+        $filters = $this->getFilters();
+
+        $timezone = AdminProxy::find($this->export->user_id)?->timezone ?? config('app.timezone', 'UTC');
+
+        $now = Date::now()->setTimezone($timezone);
+
+        $tokens = [
+            'code'        => (string) $this->export->jobInstance->code,
+            'entity_type' => (string) $this->export->jobInstance->entity_type,
+            'date'        => str_replace('/', '-', $now->format($filters['date_format'] ?? 'Y-m-d')),
+            'time'        => $now->format('His'),
+        ];
+
+        $replacements = [];
+
+        foreach ($tokens as $key => $value) {
+            $replacements['['.$key.']'] = $value;
+            $replacements['{'.$key.'}'] = $value;
+        }
+
+        $expanded = strtr($pattern, $replacements);
+
+        $expanded = preg_replace('/\.(csv|xls|xlsx)$/i', '', $expanded);
+
+        return preg_replace('/[^A-Za-z0-9_-]/', '', (string) $expanded) ?? '';
+    }
+
+    public function initializeFileBuffer()
+    {
+        $fileName = $this->getFileName();
+        $directory = sprintf('exports/%s/%s', $this->export->id, FileBuffer::FOLDER_PREFIX);
+
+        return $this->exportFileBuffer->initialize(
+            $directory,
+            $fileName,
+            ['type' => $this->filters['file_format'] ?? SpoutWriterFactory::CSV],
+        );
+    }
+
+    /**
+     * Start the export process
+     */
+    public function exportData(?JobTrackBatchContract $exportBatch = null, $filePath = null): bool
+    {
+        if (! $filePath) {
+            $this->filters = $this->export->jobInstance->filters ?? [];
+
+            if ($this->exportsFile) {
+                $this->exportBuffer = JSONFileBuffer::initialize($this->export);
+            }
+
+            $fileBuffer = $this->initializeFileBuffer();
+
+            $filePath = $fileBuffer->getFilePath();
+        }
+
+        if ($exportBatch instanceof JobTrackBatch) {
+            $this->exportBatch($exportBatch, $filePath);
+
+            return true;
+        }
+
+        $chain = [];
+
+        $pendingBatches = $this->export->batches()->where('state', 'pending')->get();
+
+        if ($pendingBatches->isNotEmpty()) {
+            $exportJobs = [];
+            foreach ($pendingBatches as $batch) {
+                $exportJobs[] = new ExportBatchJob($batch, $filePath, $this->export->id, $this->exportBuffer);
+            }
+            $chain[] = Bus::batch($exportJobs);
+        }
+
+        $chain[] = new CompletedJob($this->export, $this->export->id, $this->exportBuffer);
+
+        $queueName = $this->getQueue();
+
+        if ($queueName) {
+            Bus::chain($chain)->onQueue($queueName)->dispatch();
+        } else {
+            Bus::chain($chain)->dispatch();
+        }
+
+        return true;
+    }
+
+    /**
+     * Get the queue name for the worker.
+     */
+    protected function getQueue(): ?string
+    {
+        return $this->queue;
+    }
+
+    /**
+     * Save validated batches
+     */
+    public function initializeBatches(): self
+    {
+        $results = $this->getResults();
+
+        $this->assertExportIsFeasible($results);
+
+        $batchRows = [];
+
+        $results->rewind();
+
+        /**
+         * Clean previous saved batches
+         */
+        $this->exportBatchRepository->deleteWhere([
+            'job_track_id' => $this->export->id,
+        ]);
+
+        while (
+            $results->valid()
+            || count($batchRows)
+        ) {
+            if (
+                count($batchRows) == static::BATCH_SIZE
+                || ! $results->valid()
+            ) {
+                $this->exportBatchRepository->create([
+                    'job_track_id' => $this->export->id,
+                    'data'         => $batchRows,
+                ]);
+
+                $batchRows = [];
+            }
+
+            if ($results->valid()) {
+                $rowData = $results->current();
+
+                $batchRows[] = $rowData;
+
+                $this->processedRowsCount++;
+
+                $results->next();
+            }
+        }
+
+        $summaryData = [
+            'processed' => $this->processedRowsCount,
+            'created'   => $this->createdItemsCount,
+            'skipped'   => $this->skippedItemsCount,
+        ];
+
+        $this->updateSummary($summaryData);
+
+        return $this;
+    }
+
+    protected function assertExportIsFeasible($results): void {}
+
+    protected function getHeartbeatTrack(): mixed
+    {
+        return $this->export ?? null;
+    }
+
+    protected function guardAgainstOversizedExport(int $rows, int $columns): void
+    {
+        $freeBytes = @disk_free_space(sys_get_temp_dir());
+
+        if ($freeBytes === false || $freeBytes <= 0) {
+            return;
+        }
+
+        if (! $this->exportExceedsDiskBudget($rows, $columns, (int) $freeBytes)) {
+            return;
+        }
+
+        $estimatedBytes = (float) $rows * $columns * static::ESTIMATED_BYTES_PER_CELL;
+
+        throw new \RuntimeException(trans('data_transfer::app.exporters.export-too-large', [
+            'rows'      => number_format($rows),
+            'columns'   => number_format($columns),
+            'estimated' => $this->formatBytes($estimatedBytes),
+            'available' => $this->formatBytes($freeBytes * static::MAX_DISK_USAGE_RATIO),
+        ]));
+    }
+
+    protected function exportExceedsDiskBudget(int $rows, int $columns, int $freeBytes): bool
+    {
+        $estimatedBytes = (float) $rows * $columns * static::ESTIMATED_BYTES_PER_CELL;
+
+        return $estimatedBytes > $freeBytes * static::MAX_DISK_USAGE_RATIO;
+    }
+
+    protected function formatBytes(float $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        $power = $bytes > 0 ? (int) min(floor(log($bytes, 1024)), count($units) - 1) : 0;
+
+        return round($bytes / (1024 ** $power), 1).' '.$units[$power];
+    }
+
+    /**
+     * Updates the state of a batch in the export process.
+     */
+    public function updateBatchState(int $id, string $state): void
+    {
+        $this->heartbeat(force: true);
+
+        $processed = $this->getCreatedItemsCount() - $this->getskippedtemsCount();
+        /**
+         * Update import batch summary
+         */
+        $this->exportBatchRepository->update([
+            'state'   => $state,
+            'summary' => [
+                'processed' => max(0, $processed),
+                'created'   => $this->getCreatedItemsCount(),
+                'skipped'   => $this->getskippedtemsCount(),
+            ],
+        ], $id);
+    }
+
+    /**
+     * Update summary
+     */
+    public function updateSummary(array $summaryData): void
+    {
+        $summary = $this->export->summary;
+        foreach ($summaryData as $key => $value) {
+            if (isset($summary[$key])) {
+                $summary[$key] += $value;
+            } else {
+                $summary[$key] = $value;
+            }
+        }
+
+        $this->export->summary = $summary;
+        $this->export->save();
+    }
+
+    /**
+     * Add row as skipped
+     */
+    protected function skipRow(?int $rowNumber, string $errorCode, ?string $columnName = null, ?string $errorMessage = null): self
+    {
+        $this->errorHelper->addError(
+            $errorCode,
+            $rowNumber,
+            $columnName,
+            $errorMessage
+        );
+
+        $this->errorHelper->addRowToSkip($rowNumber);
+
+        $this->skippedItemsCount++;
+
+        return $this;
+    }
+
+    /**
+     * Returns number of skipped items count
+     */
+    public function getSkippedtemsCount(): int
+    {
+        $count = $this->export->summary['skipped'] ?? 0;
+
+        return $count + $this->skippedItemsCount;
+    }
+
+    /**
+     * Returns number of process rows
+     */
+    public function getProcessedRowsCount(): int
+    {
+        $count = $this->export->summary['processed'] ?? 0;
+
+        return $count + $this->processedRowsCount;
+    }
+
+    /**
+     * Returns number of created items count
+     */
+    public function getCreatedItemsCount(): int
+    {
+        $count = $this->export->summary['created'] ?? 0;
+
+        return $count + $this->createdItemsCount;
+    }
+
+    /**
+     * Returns CSV header based on valid column names.
+     */
+    public function getCsvHeader(): array
+    {
+        return $this->validColumnNames;
+    }
+
+    /**
+     * This function copies a media file from a source path to a destination path.
+     * If the source file exists, it will be copied to the destination.
+     *
+     * @param  string  $sourcePath  The path of the source media file.
+     * @param  string  $destinationPath  The path where the media file will be copied.
+     */
+    public function copyMedia(string $sourcePath, string $destinationPath): void
+    {
+        if (Storage::exists($sourcePath)) {
+            Storage::disk('private')->put($destinationPath, Storage::readStream($sourcePath));
+        }
+    }
+}

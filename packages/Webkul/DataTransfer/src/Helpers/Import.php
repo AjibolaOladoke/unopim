@@ -1,0 +1,743 @@
+<?php
+
+namespace Webkul\DataTransfer\Helpers;
+
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Csv;
+use PhpOffice\PhpSpreadsheet\Writer\Xls;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Psr\Log\LoggerInterface;
+use Webkul\DataTransfer\Contracts\JobTrack as JobTrackContract;
+use Webkul\DataTransfer\Contracts\JobTrackBatch as JobTrackBatchContract;
+use Webkul\DataTransfer\Helpers\Concerns\TracksJobHeartbeat;
+use Webkul\DataTransfer\Helpers\Importers\AbstractImporter;
+use Webkul\DataTransfer\Helpers\Sources\AbstractSource;
+use Webkul\DataTransfer\Helpers\Sources\CSV as CSVSource;
+use Webkul\DataTransfer\Helpers\Sources\Excel as ExcelSource;
+use Webkul\DataTransfer\Repositories\JobTrackBatchRepository;
+use Webkul\DataTransfer\Repositories\JobTrackRepository;
+use Webkul\DataTransfer\Services\JobLogger;
+
+class Import
+{
+    use TracksJobHeartbeat;
+
+    /**
+     * Import state for pending import
+     */
+    public const STATE_PENDING = 'pending';
+
+    /**
+     * Import state for validation in progress
+     */
+    public const STATE_VALIDATING = 'validating';
+
+    /**
+     * Import state for validated import
+     */
+    public const STATE_VALIDATED = 'validated';
+
+    /**
+     * Import state for processing import
+     */
+    public const STATE_PROCESSING = 'processing';
+
+    /**
+     * Import state for processed import
+     */
+    public const STATE_PROCESSED = 'processed';
+
+    /**
+     * Import state for linking import
+     */
+    public const STATE_LINKING = 'linking';
+
+    /**
+     * Import state for linked import
+     */
+    public const STATE_LINKED = 'linked';
+
+    /**
+     * Import state for indexing import
+     */
+    public const STATE_INDEXING = 'indexing';
+
+    /**
+     * Import state for indexed import
+     */
+    public const STATE_INDEXED = 'indexed';
+
+    /**
+     * Import state for completed import
+     */
+    public const STATE_COMPLETED = 'completed';
+
+    /**
+     * Import state for paused import
+     */
+    public const STATE_PAUSED = 'paused';
+
+    /**
+     * Import state for cancelled import
+     */
+    public const STATE_CANCELLED = 'cancelled';
+
+    /**
+     * Import state for failed import
+     */
+    public const STATE_FAILED = 'failed';
+
+    /**
+     * Validation strategy for skipping the error during the import process
+     */
+    public const VALIDATION_STRATEGY_SKIP_ERRORS = 'skip-errors';
+
+    /**
+     * Validation strategy for stopping the import process on error
+     */
+    public const VALIDATION_STRATEGY_STOP_ON_ERROR = 'stop-on-errors';
+
+    /**
+     * Action constant for updating/creating for the resource
+     */
+    public const ACTION_APPEND = 'append';
+
+    /**
+     * Action constant for deleting the resource
+     */
+    public const ACTION_DELETE = 'delete';
+
+    /**
+     * JobTrackContract instance.
+     */
+    protected JobTrackContract $import;
+
+    /**
+     * Error helper instance.
+     *
+     * @var Error
+     */
+    protected $typeImporter;
+
+    /**
+     * For job specific log file
+     */
+    protected $jobLogger;
+
+    /**
+     * Create a new helper instance.
+     */
+    public function __construct(
+        protected JobTrackRepository $jobTrackRepository,
+        protected JobTrackBatchRepository $jobTrackBatchRepository,
+        protected Error $errorHelper
+    ) {}
+
+    /**
+     * Set import instance.
+     */
+    public function setImport(JobTrackContract $import): self
+    {
+        $this->import = $import;
+
+        return $this;
+    }
+
+    /**
+     * Set logger instance
+     */
+    public function setLogger(LoggerInterface $logger): self
+    {
+        $this->jobLogger = $logger;
+
+        return $this;
+    }
+
+    /**
+     * Get logger instance for this job
+     */
+    public function getLogger(): LoggerInterface
+    {
+        return $this->jobLogger;
+    }
+
+    /**
+     * Returns import instance.
+     */
+    public function getImport(): JobTrackContract
+    {
+        return $this->import;
+    }
+
+    /**
+     * Returns error helper instance.
+     */
+    public function getErrorHelper(): Error
+    {
+        return $this->errorHelper;
+    }
+
+    /**
+     * Returns source helper instance.
+     */
+    public function getSource(): ?AbstractSource
+    {
+        $source = null;
+        if (Str::contains($this->import->file_path, '.csv')) {
+            $source = new CSVSource(
+                $this->import->file_path,
+                $this->import->field_separator,
+            );
+        } elseif (Str::contains($this->import->file_path, '.xlsx') || Str::contains($this->import->file_path, '.xls')) {
+            $source = new ExcelSource(filePath: $this->import->file_path);
+        }
+
+        return $source;
+    }
+
+    public function stateUpdate($state = self::STATE_VALIDATED, array $additionalData = []): Import
+    {
+        $import = $this->jobTrackRepository->update(array_merge([
+            'state' => $state,
+        ], $additionalData), $this->import->id);
+
+        $this->setImport($import);
+
+        $this->heartbeat(force: true);
+
+        return $this;
+    }
+
+    protected function getHeartbeatTrack(): mixed
+    {
+        return $this->import ?? null;
+    }
+
+    /**
+     * Validates import and returns validation result
+     */
+    public function validate(): Import
+    {
+        $state = self::STATE_VALIDATED;
+
+        try {
+            $entityType = $this->resolveEntityType($this->import->jobInstance->entity_type);
+
+            if (config('importers.'.$entityType.'.has_file_options')) {
+                $source = $this->getSource();
+
+                if (! $source) {
+                    throw new \RuntimeException('The import source file is missing or unreadable, so this job cannot be validated.');
+                }
+
+                $this->getTypeImporter()->setSource($source)->validateData();
+            } else {
+                $this->getTypeImporter()->validateData();
+            }
+        } catch (\Throwable $e) {
+            $state = self::STATE_FAILED;
+            $this->errorHelper->addError(
+                AbstractImporter::ERROR_CODE_SYSTEM_EXCEPTION,
+                null,
+                null,
+                $e->getMessage()
+            );
+        }
+
+        $updatedData = [
+            'state'                => $state,
+            'processed_rows_count' => $this->getProcessedRowsCount(),
+            'invalid_rows_count'   => $this->errorHelper->getInvalidRowsCount(),
+            'errors_count'         => $this->errorHelper->getErrorsCount(),
+            'errors'               => $this->getFormattedErrors(),
+            'error_file_path'      => $this->uploadErrorReport(),
+        ];
+
+        if ($this->getProcessedRowsCount() === 0 && $this->getFormattedErrors() === []) {
+            $updatedData['state'] = self::STATE_COMPLETED;
+            $updatedData['summary'] = [
+                'created' => 0,
+                'updated' => 0,
+                'deleted' => 0,
+            ];
+        }
+
+        $import = $this->jobTrackRepository->update($updatedData, $this->import->id);
+
+        $this->setImport($import);
+
+        if ($state === self::STATE_FAILED) {
+            Event::dispatch('data_transfer.import.validate.state_failed', $import);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Starts import process
+     */
+    public function isValid(): bool
+    {
+        if ($this->isErrorLimitExceeded()) {
+            return false;
+        }
+
+        return $this->import->processed_rows_count > $this->import->invalid_rows_count;
+    }
+
+    /**
+     * Check if error limit has been exceeded
+     */
+    public function isErrorLimitExceeded(): bool
+    {
+        return $this->import->validation_strategy == self::VALIDATION_STRATEGY_STOP_ON_ERROR
+        && $this->import->errors_count > $this->import->allowed_errors;
+    }
+
+    /**
+     * Starts import process
+     */
+    public function start(?JobTrackBatchContract $importBatch = null, ?string $queue = null): bool
+    {
+        DB::beginTransaction();
+
+        try {
+            $typeImporter = $this->getTypeImporter();
+            $typeImporter->queue = $queue;
+            $typeImporter->importData($importBatch);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    /**
+     * Link import resources
+     */
+    public function link(JobTrackBatchContract $importBatch): bool
+    {
+        DB::beginTransaction();
+
+        try {
+            $typeImporter = $this->getTypeImporter();
+
+            $typeImporter->linkData($importBatch);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    /**
+     * Index import resources
+     */
+    public function index(JobTrackBatchContract $importBatch): bool
+    {
+        DB::beginTransaction();
+
+        try {
+            $typeImporter = $this->getTypeImporter();
+
+            $typeImporter->indexData($importBatch);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    /**
+     * Started the import process
+     */
+    public function started(bool $preserveStartedAt = false): void
+    {
+        $data = [
+            'state'   => self::STATE_PROCESSING,
+            'summary' => [],
+        ];
+
+        if (! $preserveStartedAt) {
+            $data['started_at'] = now();
+        }
+
+        $import = $this->jobTrackRepository->update($data, $this->import->id);
+
+        $this->setImport($import);
+
+        $this->heartbeat(force: true);
+
+        Event::dispatch('data_transfer.imports.started', $import);
+    }
+
+    /**
+     * Started the import linking process
+     */
+    public function linking(): void
+    {
+        $import = $this->jobTrackRepository->update([
+            'state' => self::STATE_LINKING,
+        ], $this->import->id);
+
+        $this->setImport($import);
+
+        Event::dispatch('data_transfer.imports.linking', $import);
+    }
+
+    /**
+     * Started the import indexing process
+     */
+    public function indexing(): void
+    {
+        $import = $this->jobTrackRepository->update([
+            'state' => self::STATE_INDEXING,
+        ], $this->import->id);
+
+        $this->setImport($import);
+
+        Event::dispatch('data_transfer.imports.indexing', $import);
+    }
+
+    /**
+     * Pause the import process
+     */
+    public function pause(): void
+    {
+        $import = $this->jobTrackRepository->update([
+            'state' => self::STATE_PAUSED,
+        ], $this->import->id);
+
+        $this->setImport($import);
+
+        Event::dispatch('data_transfer.imports.paused', $import);
+    }
+
+    /**
+     * Resume a paused import by restoring the processing state
+     * and re-dispatching pending batches.
+     */
+    public function resume(): void
+    {
+        $import = $this->jobTrackRepository->update([
+            'state' => self::STATE_PROCESSING,
+        ], $this->import->id);
+
+        $this->setImport($import);
+
+        if (! $this->jobLogger) {
+            $this->setLogger(JobLogger::make($this->import->id));
+        }
+
+        $this->jobLogger->info('Import resumed — re-dispatching pending batches.');
+
+        $this->start();
+
+        Event::dispatch('data_transfer.imports.resumed', $import);
+    }
+
+    /**
+     * Cancel the import process
+     */
+    public function cancel(): void
+    {
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAL)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'updated')} as DECIMAL)) AS updated"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'deleted')} as DECIMAL)) AS deleted"),
+            )
+            ->where('job_track_id', $this->import->id)
+            ->groupBy('job_track_id')
+            ->first()
+            ?->toArray();
+
+        $import = $this->jobTrackRepository->update([
+            'state'        => self::STATE_CANCELLED,
+            'summary'      => $summary ?? ['created' => 0, 'updated' => 0, 'deleted' => 0],
+            'completed_at' => now(),
+        ], $this->import->id);
+
+        $this->setImport($import);
+
+        Event::dispatch('data_transfer.imports.cancelled', $import);
+    }
+
+    /**
+     * Check if import is in a state that should stop processing
+     */
+    public function shouldStop(): bool
+    {
+        $this->import->refresh();
+
+        return in_array($this->import->state, [self::STATE_PAUSED, self::STATE_CANCELLED, self::STATE_FAILED]);
+    }
+
+    /**
+     * Start the import process
+     */
+    public function completed(): void
+    {
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAl)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'updated')} as DECIMAl)) AS updated"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'deleted')} as DECIMAl)) AS deleted"),
+            )
+            ->where('job_track_id', $this->import->id)
+            ->groupBy('job_track_id')
+            ->first()?->toArray();
+
+        if ($summary) {
+            $import = $this->jobTrackRepository->update([
+                'state'        => self::STATE_COMPLETED,
+                'summary'      => $summary,
+                'completed_at' => now(),
+            ], $this->import->id);
+
+            $this->setImport($import);
+
+            Event::dispatch('data_transfer.imports.completed', $import);
+
+            $this->jobLogger->info(trans('data_transfer::app.job.completed'));
+        }
+    }
+
+    /**
+     * Returns import stats
+     */
+    public function stats(string $state): array
+    {
+        $total = $this->import->batches()->count();
+        $completed = $this->import->batches()->where('state', $state)->count();
+
+        $progress = $total
+            ? round($completed / $total * 100)
+            : 0;
+
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAL)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'updated')} as DECIMAL)) AS updated"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'deleted')} as DECIMAL)) AS deleted"),
+            )
+            ->where('job_track_id', $this->import->id)
+            ->where('state', $state)
+            ->groupBy('job_track_id')
+            ->first()
+            ?->toArray();
+
+        return [
+            'batches' => [
+                'total'     => $total,
+                'completed' => $completed,
+                'remaining' => $total - $completed,
+            ],
+            'progress' => $progress,
+            'summary'  => $summary ?? [
+                'created' => 0,
+                'updated' => 0,
+                'deleted' => 0,
+            ],
+        ];
+    }
+
+    /**
+     * Return all error grouped by error code
+     */
+    public function getFormattedErrors(): array
+    {
+        $errors = [];
+
+        foreach ($this->errorHelper->getAllErrorsGroupedByCode() as $groupedErrors) {
+            foreach ($groupedErrors as $errorMessage => $rowNumbers) {
+                $errors[] = empty($rowNumbers) ? $errorMessage : 'Row(s) '.implode(', ', $rowNumbers).': '.$errorMessage;
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Uploads error report and save the path to the database
+     */
+    public function uploadErrorReport(): ?string
+    {
+        /**
+         * Return null if there are no errors
+         */
+        if ($this->errorHelper->getErrorsCount() === 0) {
+            return null;
+        }
+
+        /**
+         * Return null if there are no invalid rows
+         */
+        if ($this->errorHelper->getInvalidRowsCount() === 0) {
+            return null;
+        }
+
+        $errors = $this->errorHelper->getAllErrors();
+        $source = $this->getTypeImporter()->getSource();
+
+        $source->rewind();
+
+        $spreadsheet = new Spreadsheet;
+
+        $sheet = $spreadsheet->getActiveSheet();
+
+        /**
+         * Add headers with extra error column
+         */
+        $sheet->fromArray(
+            [array_merge($source->getColumnNames(), [
+                'error',
+            ])],
+            null,
+            'A1'
+        );
+
+        $rowNumber = 2;
+
+        while ($source->valid()) {
+            try {
+                $rowData = $source->current();
+            } catch (\InvalidArgumentException) {
+                $source->next();
+
+                continue;
+            }
+
+            $rowErrors = $errors[$source->getCurrentRowNumber()] ?? [];
+
+            if (! empty($rowErrors)) {
+                $rowErrors = Arr::pluck($rowErrors, 'message');
+            }
+
+            $rowData[] = implode('|', $rowErrors);
+
+            $sheet->fromArray([$rowData], null, 'A'.$rowNumber++);
+
+            $source->next();
+        }
+
+        $fileType = $this->import?->file_path ? pathinfo($this->import->file_path, PATHINFO_EXTENSION) : 'xlsx';
+
+        switch ($fileType) {
+            case 'csv':
+                $writer = new Csv($spreadsheet);
+
+                $writer->setDelimiter($this->import->field_separator);
+
+                break;
+
+            case 'xls':
+                $writer = new Xls($spreadsheet);
+
+                break;
+
+            case 'xlsx':
+                $writer = new Xlsx($spreadsheet);
+
+                break;
+
+            default:
+                throw new \InvalidArgumentException("Unsupported file type: $fileType");
+        }
+        $errorFilePath = 'imports/'.time().'-error-report.'.$fileType;
+
+        Storage::disk('private')->makeDirectory('imports');
+        $writer->save(Storage::disk('private')->path($errorFilePath));
+
+        return $errorFilePath;
+    }
+
+    /**
+     * Validates source file and returns validation result
+     */
+    public function getTypeImporter(): AbstractImporter
+    {
+        $jobInstance = $this->import->jobInstance;
+
+        if (! $this->typeImporter) {
+            $entityType = $this->resolveEntityType($jobInstance->entity_type);
+            $importerConfig = config('importers.'.$entityType);
+
+            if (! is_array($importerConfig) || ! isset($importerConfig['importer'])) {
+                throw new \UnexpectedValueException(sprintf(
+                    'Importer configuration not found for entity type [%s].',
+                    $jobInstance->entity_type
+                ));
+            }
+
+            $this->typeImporter = app()->make($importerConfig['importer'])
+                ->setImport($this->import)
+                ->setLogger($this->jobLogger)
+                ->setErrorHelper($this->errorHelper);
+        }
+
+        return $this->typeImporter;
+    }
+
+    /**
+     * Returns number of checked rows.
+     */
+    public function getProcessedRowsCount(): int
+    {
+        return $this->getTypeImporter()->getProcessedRowsCount();
+    }
+
+    /**
+     * Is linking resource required for the import operation
+     */
+    public function isLinkingRequired(): bool
+    {
+        return $this->getTypeImporter()->isLinkingRequired();
+    }
+
+    /**
+     * Is indexing resource required for the import operation
+     */
+    public function isIndexingRequired(): bool
+    {
+        return $this->getTypeImporter()->isIndexingRequired();
+    }
+
+    /**
+     * Resolve legacy entity types to the current config keys.
+     */
+    protected function resolveEntityType(string $entityType): string
+    {
+        return match ($entityType) {
+            'product'  => 'products',
+            'category' => 'categories',
+            'currency' => 'currencies',
+            'role'     => 'roles',
+            'user'     => 'users',
+            default    => $entityType,
+        };
+    }
+}

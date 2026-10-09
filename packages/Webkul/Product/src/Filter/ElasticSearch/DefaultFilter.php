@@ -1,0 +1,102 @@
+<?php
+
+namespace Webkul\Product\Filter\ElasticSearch;
+
+use Webkul\Attribute\Models\Attribute;
+use Webkul\ElasticSearch\Enums\FilterOperators;
+use Webkul\ElasticSearch\QueryString;
+
+/**
+ * Default filter for an Elasticsearch query can be used for all attributes mapped as keyword
+ */
+class DefaultFilter extends AbstractElasticSearchAttributeFilter
+{
+    public function __construct(
+        array $supportedAttributeTypes = [Attribute::GALLERY_ATTRIBUTE_TYPE, Attribute::IMAGE_ATTRIBUTE_TYPE, Attribute::FILE_ATTRIBUTE_TYPE],
+        array $allowedOperators = [
+            FilterOperators::IN,
+            FilterOperators::CONTAINS,
+            FilterOperators::EQUAL,
+            FilterOperators::IS_EMPTY,
+            FilterOperators::IS_NOT_EMPTY,
+        ]
+    ) {
+        $this->supportedAttributeTypes = $supportedAttributeTypes;
+        $this->allowedOperators = $allowedOperators;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function addAttributeFilter(
+        $attribute,
+        $operator,
+        $value,
+        ?string $locale = null,
+        ?string $channel = null,
+        $options = []
+    ): static {
+        throw_if($this->queryBuilder === null, \LogicException::class, 'The search query builder is not initialized in the filter.');
+
+        $attributePath = $this->getScopedAttributePath($attribute, $locale, $channel);
+
+        switch ($operator) {
+            case FilterOperators::IN:
+                $clause = [
+                    'terms' => [
+                        $attributePath => $value,
+                    ],
+                ];
+
+                $this->queryBuilder->where($clause);
+                break;
+            case FilterOperators::CONTAINS:
+                /**
+                 * Cap wildcard expansion with rewrite: 'top_terms_1024' to avoid
+                 * exceeding maxClauseCount on high-cardinality keyword fields.
+                 */
+                $clauses = [];
+
+                foreach ((array) $value as $val) {
+                    $escapedValue = QueryString::escapeValue($val);
+                    $clauses[] = [
+                        'wildcard' => [
+                            $attributePath => [
+                                'value'   => '*'.$escapedValue.'*',
+                                'rewrite' => 'top_terms_1024',
+                            ],
+                        ],
+                    ];
+                }
+
+                $clause = [
+                    'bool' => [
+                        'should'               => $clauses,
+                        'minimum_should_match' => 1,
+                    ],
+                ];
+
+                $this->queryBuilder->where($clause);
+                break;
+
+            case FilterOperators::EQUAL:
+                $this->queryBuilder->where([
+                    'term' => [$attributePath.'.keyword' => current((array) $value)],
+                ]);
+
+                break;
+
+            case FilterOperators::IS_EMPTY:
+                $this->queryBuilder->whereNot(['exists' => ['field' => $attributePath]]);
+
+                break;
+
+            case FilterOperators::IS_NOT_EMPTY:
+                $this->queryBuilder->where(['exists' => ['field' => $attributePath]]);
+
+                break;
+        }
+
+        return $this;
+    }
+}

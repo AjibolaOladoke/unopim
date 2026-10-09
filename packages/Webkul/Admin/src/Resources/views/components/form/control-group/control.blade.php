@@ -1,0 +1,1770 @@
+@props([
+    'type' => 'text',
+    'name' => '',
+    'info' => '',
+])
+
+@php
+    $providedId = $attributes->get('id');
+
+    /** Radios share a name, so the value keeps each generated id unique. */
+    $controlId = match (true) {
+        (bool) $providedId => unique_form_control_id(form_control_id($providedId), allowSuffix: false),
+        'hidden' === $type => '',
+        default            => unique_form_control_id(form_control_id($name, 'radio' === $type ? $attributes->get('value') : null)),
+    };
+
+    $idAttribute = '' === $controlId ? [] : ['id' => $controlId];
+
+    /** Re-emitted from $controlId so the rendered id always matches what labels target. */
+    $attributes = $attributes->except(['id']);
+@endphp
+
+@switch($type)
+    @case('hidden')
+    @case('text')
+    @case('email')
+    @case('password')
+    @case('number')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <input
+                type="{{ $type }}"
+                name="{{ $name }}"
+                v-bind="field"
+                @if ('password' === $type) v-no-value-attr @endif
+                :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+                {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])->merge(['class' => 'w-full py-2.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 transition-all hover:border-gray-400 dark:hover:border-gray-400 focus:border-gray-400 dark:focus:border-gray-400 dark:bg-cherry-900 dark:hover:border-slate-300 dark:border-gray-600'] + $idAttribute) }}
+            />
+        </v-field>
+
+        @break
+
+    @case('price')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <div
+                class="focus-ring-within flex items-center w-full border rounded-md overflow-hidden text-sm text-gray-600 dark:text-gray-300 transition-all hover:border-gray-400  focus-within:border-gray-400 dark:focus:border-gray-400 dark:bg-cherry-900 dark:hover:border-slate-300 dark:border-gray-600"
+                :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+            >
+                @if (isset($currency))
+                    <span {{ $currency->attributes->merge(['class' => 'ltr:pl-4 rtl:pr-4 py-2.5 text-gray-500']) }}>
+                        {{ $currency }}
+                    </span>
+                @else
+                    <span class="ltr:pl-4 rtl:pr-4 py-2.5 text-gray-500">
+                        {{ core()->currencySymbol(core()->getBaseCurrencyCode()) }}
+                    </span>
+                @endif
+
+                <input
+                    type="text"
+                    name="{{ $name }}"
+                    v-bind="field"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])->merge(['class' => 'no-focus-ring w-full p-2.5 text-sm text-gray-600 dark:text-gray-300 dark:bg-cherry-900'] + $idAttribute) }}
+                />
+            </div>
+        </v-field>
+
+        @break
+
+    @case('file')
+        <v-field
+            v-slot="{ field = {}, errors = [], handleChange, handleBlur }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label', 'info', ':info']) }}
+            name="{{ $name }}"
+        >
+            <v-file-uploader
+                name="{{ $name }}"
+                @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                :field="field"
+                :class="[errors.length ? 'border border-red-500' : '']"
+                 {{ $attributes }}
+            >
+
+            </v-file-uploader>
+        </v-field>
+
+        @break
+
+    @case('color')
+        <v-field
+            name="{{ $name }}"
+            v-slot="{ field, errors }"
+            {{ $attributes->except('class') }}
+        >
+            <input
+                type="{{ $type }}"
+                :class="[errors.length ? 'border border-red-500' : '']"
+                v-bind="field"
+                {{ $attributes->except(['value'])->merge(['class' => 'w-full appearance-none border rounded-md text-sm text-gray-600 dark:text-gray-300 dark:border-gray-600 transition-all hover:border-gray-400 dark:hover:border-gray-400'] + $idAttribute) }}
+            >
+        </v-field>
+        @break
+
+    @case('textarea')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <textarea
+                type="{{ $type }}"
+                name="{{ $name }}"
+                v-bind="field"
+                :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+                {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])->merge(['class' => 'w-full py-2.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 transition-all hover:border-gray-400 dark:hover:border-gray-400 focus:border-gray-400 dark:focus:border-gray-400 dark:bg-cherry-900 dark:hover:border-slate-300 dark:border-gray-600'] + $idAttribute) }}
+            >
+            </textarea>
+
+            @if ($attributes->get('tinymce', false) || $attributes->get(':tinymce', false))
+                <x-admin::tinymce
+                    :selector="'textarea#' . $controlId"
+                    :prompt="stripcslashes($attributes->get('prompt', ''))"
+                    ::field="field"
+                    :entity-name="$attributes->get('entity-name', '')"
+                >
+                </x-admin::tinymce>
+            @endif
+        </v-field>
+
+        @break
+
+    @case('date')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <x-admin::flat-picker.date>
+                <input
+                    name="{{ $name }}"
+                    v-bind="field"
+                    :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])->merge(['class' => 'w-full py-2.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 transition-all hover:border-gray-400 dark:hover:border-gray-400 focus:border-gray-400 dark:focus:border-gray-400 dark:bg-cherry-900 dark:hover:border-slate-300 dark:border-gray-600'] + $idAttribute) }}
+                    autocomplete="off"
+                />
+            </x-admin::flat-picker.date>
+        </v-field>
+
+        @break
+
+    @case('datetime')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <x-admin::flat-picker.datetime>
+                <input
+                    name="{{ $name }}"
+                    v-bind="field"
+                    :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])->merge(['class' => 'w-full py-2.5 px-3 border rounded-md text-sm text-gray-600 dark:text-gray-300 transition-all hover:border-gray-400 dark:hover:border-gray-400 focus:border-gray-400 dark:focus:border-gray-400 dark:bg-cherry-900 dark:hover:border-slate-300 dark:border-gray-600'] + $idAttribute) }}
+                    autocomplete="off"
+                >
+            </x-admin::flat-picker.datetime>
+        </v-field>
+        @break
+
+    @case('select')
+        <v-field
+            v-slot="{ field, errors }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            @if ('true' == $attributes->get('async'))
+                <v-async-select-handler
+                    name="{{ $name }}"
+                    @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                    v-bind="field"
+                    :class="[errors.length ? 'border border-red-500' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                >
+                </v-async-select-handler>
+            @else
+                <v-select-handler
+                    name="{{ $name }}"
+                    @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                    v-bind="field"
+                    :class="[errors.length ? 'border border-red-500' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                >
+                </v-select-handler>
+            @endIf
+        </v-field>
+
+        @break
+
+    @case('multiselect')
+        <v-field
+            v-slot="{ field, errors }"
+            :class="[errors && errors['{{ $name }}'] ? 'border !border-red-600 hover:border-red-600' : '']"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            @if ('true' == $attributes->get('async'))
+                <v-async-select-handler
+                    name="{{ $name }}"
+                    @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                    v-bind="field"
+                    :class="[errors.length ? 'border border-red-500' : '']"
+                    multiple="true"
+                    :onselect="false"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                >
+                </v-async-select-handler>
+            @else
+                <v-multiselect-handler
+                    name="{{ $name }}"
+                    @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                    v-bind="field"
+                    :onselect="false"
+                    :class="[errors.length ? 'border border-red-500' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                >
+                </v-multiselect-handler>
+            @endIf
+        </v-field>
+
+        @break
+
+    @case('tagging')
+        <v-field
+            v-slot="{ field, errors }"
+            :class="[errors && errors['{{ $name }}'] ? 'border !border-red-600 hover:border-red-600' : '']"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+                <v-tagging-handler
+                    :taggable=true
+                    name="{{ $name }}"
+                    @if ('' !== $controlId) id="{{ $controlId }}" @endif
+                    v-bind="field"
+                    :class="[errors.length ? 'border border-red-500' : '']"
+                    {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                >
+                </v-tagging-handler>
+            
+        </v-field>
+
+        @break
+
+        @case('taggingselect')
+        <v-field
+            v-slot="{ field, errors }"
+            :class="[errors && errors['{{ $name }}'] ? 'border !border-red-600 hover:border-red-600' : '']"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+        <v-taggingselect-handler
+            :taggable=true
+            name="{{ $name }}"
+            @if ('' !== $controlId) id="{{ $controlId }}" @endif
+            v-bind="field"
+            :class="[errors.length ? 'border border-red-500' : '']"
+            {{ $attributes->except(['value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+        >
+        </v-taggingselect-handler>
+            
+        </v-field>
+
+        @break
+
+    @case('checkbox')
+        <v-field
+            v-slot="{ field }"
+            type="checkbox"
+            class="hidden"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <input
+                type="checkbox"
+                name="{{ $name }}"
+                v-bind="field"
+                class="sr-only peer"
+                {{ $attributes->except(['for', 'rules', 'label', ':label'])->merge($idAttribute) }}
+            />
+
+            <v-checkbox-handler
+                :field="field"
+                checked="{{ $attributes->get('checked') }}"
+            >
+            </v-checkbox-handler>
+        </v-field>
+
+        <label
+            @if ('' !== $controlId) for="{{ $controlId }}" @endif
+            {{
+                $attributes
+                    ->except(['id', 'name', 'for', 'type', 'checked', 'disabled', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label'])
+                    ->merge(['class' => 'icon-checkbox-normal text-2xl peer-checked:icon-checkbox-check peer-checked:text-primary-700 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary-600 peer-focus-visible:rounded-sm'])
+                    ->merge(['class' => $attributes->get('disabled') ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'])
+            }}
+        >
+        </label>
+
+        @break
+
+    @case('radio')
+        <v-field
+            type="radio"
+            class="hidden"
+            v-slot="{ field }"
+            {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+            name="{{ $name }}"
+        >
+            <input
+                type="radio"
+                name="{{ $name }}"
+                v-bind="field"
+                class="sr-only peer"
+                {{ $attributes->except(['for', 'rules', 'label', ':label'])->merge($idAttribute) }}
+            />
+        </v-field>
+
+        <label
+            class="icon-radio-normal text-2xl peer-checked:icon-radio-selected peer-checked:text-primary-700 cursor-pointer peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary-600 peer-focus-visible:rounded-full"
+            @if ('' !== $controlId) for="{{ $controlId }}" @endif
+            {{ $attributes->except(['id', 'name', 'for', 'type', 'checked', 'disabled', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+        >
+        </label>
+
+        @break
+
+    @case('switch')
+        <span class="relative inline-flex items-center cursor-pointer">
+            <v-field
+                type="checkbox"
+                class="hidden"
+                v-slot="{ field }"
+                {{ $attributes->only(['name', ':name', 'value', ':value', 'v-model', 'rules', ':rules', 'label', ':label']) }}
+                name="{{ $name }}"
+            >
+                <input
+                    type="checkbox"
+                    name="{{ $name }}"
+                    class="sr-only peer"
+                    v-bind="field"
+                    {{ $attributes->except(['for', ':for', 'v-model', 'rules', ':rules', 'label', ':label'])->merge($idAttribute) }}
+                />
+
+                <v-checkbox-handler
+                    class="hidden"
+                    :field="field"
+                    checked="{{ $attributes->get('checked') }}"
+                >
+                </v-checkbox-handler>
+            </v-field>
+
+            <label
+                class="rounded-full w-9 h-5 bg-gray-200 cursor-pointer peer-focus:ring-primary-300 after:bg-white dark:after:bg-white after:border-gray-300 dark:after:border-white peer-checked:bg-primary-700 dark:peer-checked:bg-primary-700 peer peer-checked:after:border-white peer-checked:after:ltr:translate-x-full peer-checked:after:rtl:-translate-x-full after:content-[''] after:absolute after:top-0.5 after:ltr:left-0.5 after:rtl:right-0.5 peer-focus:outline-none after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-cherry-800"
+                @if ('' !== $controlId) for="{{ $controlId }}" @endif
+                {{ $attributes->only([':for']) }}
+            ></label>
+        </span>
+
+        @break
+
+    @case('image')
+        <x-admin::media.image
+            name="{{ $name }}"
+            @if ($providedId) id="{{ $providedId }}" @endif
+            ::class="[errors && errors['{{ $name }}'] ? 'border !border-red-600 hover:border-red-600' : '']"
+            {{ $attributes }}
+        />
+
+        @break
+
+    @case('custom')
+        <v-field {{ $attributes }}>
+            {{ $slot }}
+        </v-field>
+@endswitch
+
+@pushOnce('scripts')
+    <script type="text/x-template" id="v-checkbox-handler-template">        
+    </script>
+
+    <script type="module">
+        app.component('v-checkbox-handler', {
+            template: '#v-checkbox-handler-template',
+
+            props: ['field', 'checked'],
+
+            mounted() {
+                if (this.checked == '') {
+                    return;
+                }
+
+                this.field.checked = true;
+
+                this.field.onChange();
+            },
+        });
+
+    </script>
+
+    <script type="text/x-template" id="v-select-handler-template">
+        <div :id="id">
+            <v-multiselect
+                :track-by="trackBy ?? 'id'"
+                :label="labelBy ?? 'label'"
+                :options="formattedOptions"
+                :preserve-search="false"
+                :searchable="true"
+                :placeholder="placeholder"
+                :close-on-select="true"
+                :clear-on-select="true"
+                :show-no-results="true"
+                :hide-selected="false"
+                :disabled="disabled ?? false"
+                :name="name"
+                v-model="selectedValue"
+                v-bind="field"
+                @select="selectOption"
+                @remove="removeOption"
+            >
+                <template v-slot:option="{ option }">
+                    <span v-text="option[labelBy ?? 'label'] ?? option.label"></span>
+
+                    <span
+                        v-if="option.description"
+                        class="block text-xs text-gray-500 dark:text-gray-300 whitespace-normal mt-0.5"
+                        v-text="option.description"
+                    ></span>
+                </template>
+            </v-multiselect>
+            <input
+                v-model="selectedOption"
+                :name="name"
+                type="hidden"
+            >
+        </div>
+
+    </script>
+
+    <script type="module">
+        app.component('v-select-handler', {
+            template: '#v-select-handler-template',
+
+            props: {
+                id: String,
+                trackBy: {
+                    type: String,
+                    default: 'id'
+                },
+                labelBy: {
+                    type: String,
+                    default: 'label'
+                },
+                options: Array,
+                label: String,
+                name: String,
+                value: String,
+                field: Array,
+                placeholder: String,
+                disabled: Boolean
+            },
+            
+            data() {
+                const parsed = this.parseValue();
+                return {
+                    selectedValue: parsed != null ? this.parseOptions().find(option => String(option[this.trackBy]) === String(parsed)) : null,
+                    initialValue: this.value,
+                }
+            },
+
+            mounted() {
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            computed: {
+                formattedOptions() {
+                    return this.parseOptions();
+                },
+                selectedOption() {
+                    return this.selectedValue instanceof Object ? this.selectedValue[this.trackBy] : null;
+                }
+            },
+
+            watch: {
+                selectedValue(newValue) {
+                    if (! (newValue instanceof Object)) {
+                        this.$emit('input', '');
+
+                        return;
+                    }
+
+                    this.$emit('input', JSON.stringify(newValue));
+                },
+            },
+
+            methods: {
+                resetToInitial() {
+                    const parsed = this.parseInitialValue();
+
+                    this.selectedValue = parsed != null
+                        ? this.parseOptions().find(option => String(option[this.trackBy]) === String(parsed))
+                        : null;
+                },
+                parseInitialValue() {
+                    try {
+                        return this.initialValue ? JSON.parse(this.initialValue) : null;
+                    } catch (error) {
+                        return this.initialValue;
+                    }
+                },
+                parseOptions() {
+                    try {
+                        return JSON.parse(this.options);
+                    } catch (error) {
+                        if (this.options !== null && Array.isArray(this.options)) {
+                            return this.options;
+                        }
+                        
+                        console.error('Error parsing options JSON:', error);
+
+                        return [];
+                    }
+                },
+                parseValue() {
+                    try {
+                        return this.value ? JSON.parse(this.value) : null;
+                    } catch (error) {
+                        return this.value;
+                    }
+                },
+                selectOption(newValue) {
+                    this.$emit('select-option', {
+                        target: {
+                            value: newValue
+                        }
+                    });
+                },
+                removeOption(removeValue) {
+                    this.$emit('remove-option', {
+                        target: {
+                            value: removeValue
+                        }
+                    });
+                },
+            }
+        });
+    </script>
+
+    <script type="text/x-template" id="v-multiselect-handler-template">
+        <div :id="id">
+            <v-multiselect
+                :track-by="trackBy"
+                :label="labelBy"
+                :options="formattedOptions"
+                :preserve-search="false"
+                :multiple="true"
+                :searchable="true"
+                :placeholder="placeholder"
+                :close-on-select="onselect"
+                :clear-on-select="true"
+                :show-no-results="true"
+                :hide-selected="true"
+                :disabled="disabled"
+                :name="name"
+                v-model="selectedValue"
+                v-bind="field"
+                @select="selectOption"
+                @remove="removeOption"
+            >
+
+            </v-multiselect>   
+            <input
+                v-model="selectedOption"
+                :name="name"
+                type="hidden"
+            >
+        </div>
+    </script>
+
+    <script type="module">
+        app.component('v-multiselect-handler', {
+            template: '#v-multiselect-handler-template',
+
+            props: {
+                id: String,
+                trackBy: {
+                    type: String,
+                    default: 'id'
+                },
+                labelBy: {
+                    type: String,
+                    default: 'label'
+                },
+                options: Array,
+                label: String,
+                name: String,
+                value: String,
+                field: Array,
+                placeholder: String,
+                onselect: {
+                    default: true
+                },
+                disabled: {
+                    type: Boolean,
+                    default: false
+                }
+            },
+
+            data() {
+                return {
+                    selectedValue: this.parseValue() ? this.parseOptions().filter(option =>  this.parseValue() instanceof Array && this.parseValue()?.some(valueItem => option[this.trackBy] === valueItem)) : [],
+                    initialValue: this.value,
+                }
+            },
+
+            mounted() {
+                this.resetToInitial = () => {
+                    let values;
+
+                    try {
+                        values = this.initialValue ? JSON.parse(this.initialValue) : [];
+                    } catch (error) {
+                        values = this.initialValue;
+                    }
+
+                    this.selectedValue = (values instanceof Array)
+                        ? this.parseOptions().filter(option => values.some(valueItem => option[this.trackBy] === valueItem))
+                        : [];
+                };
+
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            computed: {
+                formattedOptions() {
+                    return this.parseOptions();
+                },
+                selectedOption() {
+                    let selectedOptions = [];
+
+                    this.selectedValue instanceof Array ? this.selectedValue.forEach((item) => {
+                        selectedOptions.push(item[this.trackBy]);
+                    }) : null;
+
+                    return selectedOptions.length > 0 ? selectedOptions : null;
+                }
+            },
+
+            watch: {
+                selectedValue(newValue) {
+                    if (
+                        (newValue instanceof Array && newValue.length < 1) || null == newValue
+                    ) {
+                        this.$emit('input', newValue);
+
+                        return;
+                    }
+
+                    this.$emit('input', JSON.stringify(newValue));
+                },
+            },
+
+            methods: {
+                parseOptions() {
+                    try {
+                        if (Array.isArray(this.options)) {
+                            return this.options;
+                        }
+
+                        const parsed = this.options ? JSON.parse(this.options) : [];
+
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (error) {
+                        console.error('Error parsing options JSON:', error);
+                        return [];
+                    }
+                },
+                parseValue() {
+                    try {
+                        return this.value ? JSON.parse(this.value) : [];
+                    } catch (error) {
+                        return this.value;
+                    }
+                },
+                selectOption(newValue) {
+                    this.$emit('select-option', {
+                        target: {
+                            value: newValue
+                        }
+                    });
+                },
+                removeOption(removeValue) {
+                    this.$emit('remove-option', {
+                        target: {
+                            value: removeValue
+                        }
+                    });
+                },
+            }
+        });
+    </script>
+
+    <script type="text/x-template" id="v-tagging-handler-template">
+        <div :id="id">
+            <v-multiselect
+                :track-by="trackBy"
+                :label="labelBy"
+                :taggable="true"
+                @tag="addTag"
+                @select="selectOption"
+                @remove="removeOption"
+                :options="formattedOptions"
+                :preserve-search="false"
+                :multiple="true"
+                :searchable="true"
+                :placeholder="placeholder"
+                :close-on-select="true"
+                :clear-on-select="false"
+                :show-no-results="true"
+                :hide-selected="true"
+                :name="name"
+                v-model="selectedValue"
+                v-bind="field"
+            >
+
+            </v-multiselect>   
+            <input
+                v-model="selectedOption"
+                :name="name"
+                type="hidden"
+            >
+        </div>
+    </script>
+
+    <script type="module">
+        app.component('v-tagging-handler', {
+            template: '#v-tagging-handler-template',
+
+            props: {
+                id: String,
+                trackBy: {
+                    type: String,
+                    default: 'id'
+                },
+                labelBy: {
+                    type: String,
+                    default: 'label'
+                },
+                options: Array,
+                label: String,
+                name: String,
+                value: String,
+                field: Array,
+                placeholder: String,
+            },
+
+            data() {
+                return {
+                    selectedValue: this.parseValue() ? this.parseOptions().filter(option =>  this.parseValue() instanceof Array && this.parseValue()?.some(valueItem => option[this.trackBy] === valueItem)) : [],
+                    initialValue: this.value,
+                }
+            },
+
+            mounted() {
+                this.resetToInitial = () => {
+                    let values;
+
+                    try {
+                        values = this.initialValue ? JSON.parse(this.initialValue) : [];
+                    } catch (error) {
+                        values = this.initialValue;
+                    }
+
+                    this.selectedValue = (values instanceof Array)
+                        ? this.parseOptions().filter(option => values.some(valueItem => option[this.trackBy] === valueItem))
+                        : [];
+                };
+
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            computed: {
+                formattedOptions() {
+                    return this.parseOptions();
+                },
+                selectedOption() {
+                    let selectedOptions = [];
+
+                    this.selectedValue instanceof Array ? this.selectedValue.forEach((item) => {
+                        selectedOptions.push(item[this.trackBy]);
+                    }) : null;
+
+                    return selectedOptions.length > 0 ? selectedOptions : null;
+                },
+
+            },
+
+            watch: {
+                selectedValue(newValue) {
+                    if (
+                        (newValue instanceof Array && newValue.length < 1) || null == newValue
+                    ) {
+                        this.$emit('input', newValue);
+
+                        return;
+                    }
+
+                    this.$emit('input', JSON.stringify(newValue));
+                },
+            },
+
+            methods: {
+                parseOptions() {
+                    try {
+                        if (Array.isArray(this.options)) {
+                            return this.options;
+                        }
+
+                        const parsed = this.options ? JSON.parse(this.options) : [];
+
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (error) {
+                        console.error('Error parsing options JSON:', error);
+                        return [];
+                    }
+                },
+                parseValue() {
+                    try {
+                        return this.value ? JSON.parse(this.value) : [];
+                    } catch (error) {
+                        return this.value;
+                    }
+                },
+                addTag (newTag) {
+                    const tag = {
+                        name: newTag,
+                        code: newTag
+                    };
+                    this.formattedOptions.push(tag);
+                    this.selectedValue.push(tag);
+                    this.$emit('add-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },
+                selectOption(tag) {
+                    this.$emit('select-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },
+                removeOption(tag) {
+                    this.$emit('remove-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },                
+            }
+        });
+    </script>
+
+    <script type="text/x-template" id="v-taggingselect-handler-template">
+        <div :id="id">
+            <v-multiselect
+                :track-by="trackBy"
+                :label="labelBy"
+                :taggable="true"
+                @tag="addTag"
+                @select="selectOption"
+                @remove="removeOption"
+                :options="formattedOptions"
+                :preserve-search="false"
+                :multiple="true"
+                :searchable="true"
+                :placeholder="placeholder"
+                :close-on-select="true"
+                :clear-on-select="false"
+                :show-no-results="true"
+                :hide-selected="true"
+                :name="name"
+                v-model="selectedValue"
+                v-bind="field"
+                @search-change="handleSearch"
+                @open="openedSelect"
+                @scroll="onScroll"
+                ref="taggingselect__handler__"
+                :loading="isLoading ?? false"
+                :internal-search="false"
+                :disabled="disabled ?? false"
+            >
+            </v-multiselect>   
+            <input
+                v-model="selectedOption"
+                :name="name"
+                type="hidden"
+            >
+        </div>
+    </script>
+
+    <script type="module">
+        app.component('v-taggingselect-handler', {
+            template: '#v-taggingselect-handler-template',
+
+            props: {
+                id: String,
+                trackBy: {
+                    type: String,
+                    default: 'id'
+                },
+                labelBy: {
+                    type: String,
+                    default: 'label'
+                },
+                options: Array,
+                label: String,
+                name: String,
+                value: String,
+                field: Array,
+                placeholder: String,
+                entityName: String,
+                attributeId: String,
+                multiple: Boolean,
+                listRoute: {
+                    type: String,
+                    default: '{{ route('admin.catalog.options.fetch-all') }}'
+                },
+                queryParams: [Array, Object],
+            },
+            
+            data() {
+                return {
+                    selectedValue: this.parseValue() ? this.parseOptions().filter(option =>  this.parseValue() instanceof Array && this.parseValue()?.some(valueItem => option[this.trackBy] === valueItem)) : [],
+                    initialValue: this.value,
+                    isLoading: false,
+                    optionsList: [],
+                    timer: null,
+                    delayTime: 500,
+                    lastPage: 1,
+
+                    params: {
+                        entityName: this.entityName,
+                        attributeId: this.attributeId,
+                        page: 1,
+                        locale: "{{ core()->getRequestedLocaleCode() }}",
+                        ...this.queryParams
+                    }
+                }
+            },
+            mounted() {
+                this.$nextTick(() => {
+                    const list = this.$refs['taggingselect__handler__']?._?.refs?.list;
+
+                    if (list) {
+                        list.addEventListener('scroll', this.onScroll);
+                    }
+
+                    if (this.selectedValue && typeof this.selectedValue != 'object') {
+                        this.initializeValue();
+                    }
+                });
+
+                this.resetToInitial = () => {
+                    let parsed;
+
+                    try {
+                        parsed = this.initialValue ? JSON.parse(this.initialValue) : [];
+                    } catch (error) {
+                        parsed = this.initialValue;
+                    }
+
+                    this.selectedValue = parsed
+                        ? this.parseOptions().filter(option => parsed instanceof Array && parsed?.some(valueItem => option[this.trackBy] === valueItem))
+                        : [];
+
+                    if (this.selectedValue && typeof this.selectedValue != 'object') {
+                        this.initializeValue();
+                    }
+                };
+
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            computed: {
+                formattedOptions() {
+                    return this.optionsList;
+                },
+                selectedOption() {
+                    let selectedOptions = [];
+
+                    this.selectedValue instanceof Array ? this.selectedValue.forEach((item) => {
+                        selectedOptions.push(item[this.trackBy]);
+                    }) : null;
+
+                    return selectedOptions.length > 0 ? selectedOptions : null;
+                },
+                
+            },
+
+            watch: {
+                selectedValue(newValue) {
+                    if (
+                        (newValue instanceof Array && newValue.length < 1) || null == newValue
+                    ) {
+                        this.$emit('input', newValue);
+
+                        return;
+                    }
+
+                    this.$emit('input', JSON.stringify(newValue));
+                },
+            },
+
+            methods: {
+                search(query) {
+                    this.isLoading = true;
+                    this.params.query = query;
+                    this.params.page = 1;
+
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.optionsList = result.data.options;
+                            this.lastPage = result.data.lastPage;
+                            this.params.page = result.data.page;
+
+                            this.isLoading = false;
+                        })
+                },
+                openedSelect(id) {
+                    if (this.optionsList.length < 1) {
+                        this.isLoading = true;
+
+                        this.$axios.get(this.listRoute, {params: this.params})
+                            .then((result) => {
+                                this.optionsList = result.data.options;
+                                this.lastPage = result.data.lastPage;
+                                this.params.page = result.data.page;
+
+                                this.isLoading = false;
+                            });
+                    }
+                },
+                onScroll(e) {
+                    const element = this.$refs['taggingselect__handler__']?._?.refs?.list;
+
+                    if (! element) {
+                        return;
+                    }
+
+                    const tolerance = 10;
+
+                    if (
+                        (element.scrollHeight - element.scrollTop) - element.clientHeight <= tolerance
+                        && this.lastPage > this.params.page
+                    ) {
+                        this.fetchMore();
+                    }
+                },
+                fetchMore() {
+                    this.isLoading = true;
+
+                    this.params.page++;
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.optionsList = [...this.optionsList, ...result.data.options];
+                            this.lastPage = result.data.lastPage;
+                            this.params.page = result.data.page;
+
+                            this.isLoading = false;
+                        });
+                },
+
+                initializeValue() {
+                    this.isLoading = true;
+                    this.params.identifiers = {
+                        columnName: this.trackBy,
+                        values: 'string' == typeof this.selectedValue ? this.selectedValue?.split(',') : this.selectedValue
+                    };
+
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.selectedValue = this.multiple ? result.data.options : result.data.options[0];
+
+                            this.params.identifiers = {};
+
+                            this.isLoading = false;
+                        })
+                },
+                handleSearch(query) {
+                    if (null !== this.timer) {
+                        clearTimeout(this.timer);
+                    }
+
+                    this.timer = setTimeout(() => this.search(query), this.delayTime);
+                },
+
+                parseOptions() {
+                    try {
+                        if (Array.isArray(this.options)) {
+                            return this.options;
+                        }
+
+                        const parsed = this.options ? JSON.parse(this.options) : [];
+
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (error) {
+                        console.error('Error parsing options JSON:', error);
+                        return [];
+                    }
+                },
+                parseValue() {
+                    try {
+                        return this.value ? JSON.parse(this.value) : [];
+                    } catch (error) {
+                        return this.value;
+                    }
+                },
+                addTag (newTag) {
+                    const tag = {
+                        name: newTag,
+                        code: newTag
+                    };
+                    this.formattedOptions.push(tag);
+                    this.selectedValue.push(tag);
+                    this.$emit('add-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },
+                selectOption(tag) {
+                    this.$emit('select-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },
+                removeOption(tag) {
+                    this.$emit('remove-option', {
+                        target: {
+                            value: tag
+                        }
+                    });
+                },                
+            }
+        });
+    </script>
+
+    <script type="text/x-template" id="v-async-select-handler-template">
+        <div :id="id">
+            <v-multiselect
+                :track-by="trackBy"
+                :label="labelBy"
+                :options="formattedOptions"
+                :preserve-search="true"
+                :searchable="true"
+                :placeholder="placeholder"
+                :loading="isLoading ?? false"
+                :max-height="600"
+                :internal-search="false"
+                :close-on-select="onselect"
+                :clear-on-select="false"
+                :show-no-results="true"
+                :hide-selected="false"
+                :disabled="disabled ?? false"
+                :multiple="multiple ?? false"
+                :taggable="taggable ?? false"
+                :tag-placeholder="tagPlaceholder"
+                :name="name"
+                @search-change="handleSearch"
+                @tag="createOption"
+                @open="openedSelect"
+                @scroll="onScroll"
+                @select="selectOption"
+                @remove="removeOption"
+                ref="multiselect__handler__"
+                v-model="selectedValue"
+                v-bind="field"
+            >
+                @isset($option)
+                    <template v-slot:option="{ option }">
+                        {{ $option }}
+                    </template>
+                @endisset
+
+                @isset($singleLabel)
+                    <template v-slot:singleLabel="{ option }">
+                        {{ $singleLabel }}
+                    </template>
+                @endisset
+
+                @isset($tag)
+                    <template v-slot:tag="{ option, remove }">
+                        {{ $tag }}
+                    </template>
+                @endisset
+            </v-multiselect>
+            <input
+                v-model="selectedOption"
+                :name="name"
+                type="hidden"
+            >
+        </div>
+        
+        <div class="overflow-auto w-full">
+            <x-admin::modal ref="imagePreviewModal">
+                <x-slot:header>
+                    <p class="text-lg text-gray-800 dark:text-white font-bold"></p>
+                </x-slot>
+                <x-slot:content>
+                    <div style="max-width: 100%; height: 260px;">
+                        <img :src="fileUrl" class="w-full h-full object-contain object-top" />
+                    </div>
+                </x-slot>
+            </x-admin::modal>
+        </div>
+         
+    </script>
+
+    <script type="module">
+        app.component('v-async-select-handler', {
+            template: '#v-async-select-handler-template',
+
+            props: {
+                id: String,
+                trackBy: {
+                    type: String,
+                    default: 'id'
+                },
+                labelBy: {
+                    type: String,
+                    default: 'label'
+                },
+                options: Array,
+                label: String,
+                name: String,
+                value: String,
+                field: Array,
+                placeholder: String,
+                disabled: Boolean,
+                entityName: String,
+                attributeId: String,
+                multiple: Boolean,
+                onselect: {
+                    type: Boolean,
+                    default: true
+                },
+                listRoute: {
+                    type: String,
+                    default: "{{ route('admin.catalog.options.fetch-all')}}"
+                },
+                queryParams: [Array, Object, String],
+                taggable: {
+                    type: Boolean,
+                    default: false
+                },
+                createRoute: {
+                    type: String,
+                    default: ''
+                },
+                tagPlaceholder: {
+                    type: String,
+                    default: ''
+                },
+            },
+
+            data() {
+                return {
+                    selectedValue: this.parseValue() ? this.parseValue() : null,
+                    initialValue: this.value,
+
+                    isLoading: false,
+                    isRehydrating: false,
+                    optionsList: [],
+                    timer: null,
+                    delayTime: 500,
+                    lastPage: 1,
+
+                    params: {
+                        entityName: this.entityName,
+                        attributeId: this.attributeId,
+                        page: 1,
+                        locale: "{{ core()->getRequestedLocaleCode() }}",
+                        ...this.parsedQueryParams()
+                    }
+                }
+            },
+
+            computed: {
+                formattedOptions() {
+                    return this.optionsList;
+                },
+                selectedOption() {
+                    if (this.multiple) {
+                        return this.getMultiSelectedOption();
+                    }
+
+                    return this.getSingleSelectedOption();
+                }
+            },
+
+            mounted() {
+                this.$nextTick(() => {
+                    const listRef = this.$refs['multiselect__handler__']?._?.refs?.list;
+                    if (listRef) {
+                        listRef.addEventListener('scroll', this.onScroll);
+                    }
+                });
+
+                if (this.selectedValue && typeof this.selectedValue != 'object') {
+                    this.initializeValue();
+                }
+
+                this.resetToInitial = () => {
+                    let parsed;
+
+                    try {
+                        parsed = this.initialValue ? JSON.parse(this.initialValue) : null;
+                    } catch (error) {
+                        parsed = this.initialValue;
+                    }
+
+                    this.selectedValue = parsed ? parsed : null;
+
+                    if (this.selectedValue && typeof this.selectedValue != 'object') {
+                        this.initializeValue();
+                    }
+                };
+
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+
+            watch: {
+                selectedValue(newValue) {
+                    if (this.isRehydrating) {
+                        this.isRehydrating = false;
+
+                        return;
+                    }
+
+                    if (this.multiple && this.isInvalidMultipleValue(newValue)) {
+                        this.$emit('input', newValue);
+
+                        return;
+                    } else if (! this.multiple && this.isInvalidSingleValue(newValue)) {
+                        this.$emit('input', '');
+
+                        return;
+                    }
+
+                    this.$emit('input', JSON.stringify(newValue));
+                },
+
+                value(newValue) {
+                    if (newValue !== '' && newValue !== null && newValue !== undefined) {
+                        return;
+                    }
+
+                    if (this.selectedValue !== null) {
+                        this.selectedValue = null;
+                    }
+                },
+            },
+
+            methods: {
+                parseValue() {
+                    try {
+                        return this.value ? JSON.parse(this.value) : null;
+                    } catch (error) {
+                        return this.value;
+                    }
+                },
+                {{-- Blade cannot bind a computed object to a Vue prop from a component
+                     attribute, so server-rendered callers pass their filters as JSON. --}}
+                parsedQueryParams() {
+                    if (typeof this.queryParams !== 'string') {
+                        return this.queryParams;
+                    }
+
+                    try {
+                        return JSON.parse(this.queryParams);
+                    } catch (error) {
+                        return {};
+                    }
+                },
+                getMultiSelectedOption() {
+                    let selectedOptions = [];
+
+                    this.selectedValue instanceof Array ? this.selectedValue.forEach((item) => {
+                        selectedOptions.push(item[this.trackBy]);
+                    }) : null;
+
+                    return selectedOptions.length > 0 ? selectedOptions : null
+                },
+                getSingleSelectedOption() {
+                    return this.selectedValue instanceof Object ? this.selectedValue[this.trackBy] : null;
+                },
+                isInvalidMultipleValue(newValue) {
+                    if ((newValue instanceof Array && newValue.length < 1) || null == newValue) {
+                        return true;
+                    }
+
+                    return false;
+                },
+                isInvalidSingleValue(newValue) {
+                    if (! (newValue instanceof Object)) {
+                        return true;
+                    }
+
+                    return false;
+                },
+
+                handleSearch(query) {
+                    if (null !== this.timer) {
+                        clearTimeout(this.timer);
+                    }
+
+                    this.timer = setTimeout(() => this.search(query), this.delayTime);
+                },
+
+                search(query) {
+                    this.isLoading = true;
+                    this.params.query = query;
+                    this.params.page = 1;
+
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.optionsList = result.data.options;
+                            this.lastPage = result.data.lastPage;
+                            this.params.page = result.data.page;
+
+                            this.isLoading = false;
+                        })
+                },
+                openedSelect(id) {
+                    if (this.optionsList.length < 1) {
+                        this.isLoading = true;
+                        
+                        this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.optionsList = result.data.options;
+                            this.lastPage = result.data.lastPage;
+                            this.params.page = result.data.page;
+                            
+                            this.isLoading = false;
+                        });
+                    }
+
+                    this.$nextTick(() => {
+                        const listEl = this.$refs['multiselect__handler__'].$el.querySelector('.multiselect__content-wrapper');
+
+                        if (listEl) {
+                            listEl.removeEventListener('scroll', this.onScroll);
+                            listEl.addEventListener('scroll', this.onScroll);
+                        }
+                    });
+                },
+                onScroll(e) {
+                    const element = this.$refs['multiselect__handler__']?._?.refs?.list;
+
+                    if (! element) {
+                        return;
+                    }
+
+                    const tolerance = 10;
+
+                    if (
+                        (element.scrollHeight - element.scrollTop) - element.clientHeight <= tolerance
+                        && this.lastPage > this.params.page
+                    ) {
+                        this.fetchMore();
+                    }
+                },
+                fetchMore() {
+                    this.isLoading = true;
+
+                    this.params.page++;
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.optionsList = [...this.optionsList, ...result.data.options];
+                            this.lastPage = result.data.lastPage;
+                            this.params.page = result.data.page;
+
+                            this.isLoading = false;
+                        });
+                },
+
+                initializeValue() {
+                    this.isLoading = true;
+                    this.isRehydrating = true;
+                    this.params.identifiers = {
+                        columnName: this.trackBy,
+                        values: 'string' == typeof this.selectedValue ? this.selectedValue?.split(',') : this.selectedValue
+                    };
+
+                    this.$axios.get(this.listRoute, {params: this.params})
+                        .then((result) => {
+                            this.selectedValue = this.multiple ? result.data.options : result.data.options[0];
+
+                            this.params.identifiers = {};
+
+                            this.isLoading = false;
+                        })
+                        .catch(() => {
+                            this.isRehydrating = false;
+
+                            this.params.identifiers = {};
+
+                            this.isLoading = false;
+                        })
+                },
+
+                selectOption(newValue) {
+                    this.$emit('select-option', {
+                        target: {
+                            value: newValue
+                        }
+                    });
+                },
+
+                removeOption(removeValue) {
+                    this.$emit('remove-option', {
+                        target: {
+                            value: removeValue
+                        }
+                    });
+                },
+
+                createOption(query) {
+                    if (! this.createRoute) {
+                        return;
+                    }
+
+                    const code = query.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+                    if (! code) {
+                        return;
+                    }
+
+                    this.isLoading = true;
+
+                    this.$axios.post(this.createRoute, { code: code, name: query.trim() })
+                        .then((response) => {
+                            const option = response.data.data;
+
+                            this.optionsList.unshift(option);
+
+                            if (this.multiple) {
+                                const current = Array.isArray(this.selectedValue) ? this.selectedValue : [];
+
+                                this.selectedValue = [...current, option];
+                            } else {
+                                this.selectedValue = option;
+                            }
+
+                            this.selectOption(option);
+
+                            this.isLoading = false;
+                        })
+                        .catch((error) => {
+                            this.isLoading = false;
+
+                            const message = error.response?.data?.errors?.code?.[0]
+                                ?? error.response?.data?.message
+                                ?? '';
+
+                            this.$emitter.emit('add-flash', { type: 'warning', message: message });
+                        });
+                },
+
+                previewImage(option) {
+                    this.fileUrl = option.swatch_value_url || '{{ unopim_asset('images/product-placeholders/front.svg') }}';
+                    this.$refs.imagePreviewModal.toggle();
+                }
+            }
+        });
+    </script>
+    <script type="text/x-template" id="v-file-uploader-template">
+        <div :class="[errors.length ? 'flex items-center justify-center w-full border !border-red-600 hover:border-red-600' : 'flex items-center justify-center w-full']">
+            <label
+                :for="inputId"
+                class="flex flex-col items-center justify-center w-full h-full border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 dark:bg-gray-700 hover:bg-primary-50 dark:border-gray-600 dark:hover:border-gray-500 dark:hover:bg-gray-600 transition-colors"
+                @dragover.prevent="isDragging = true"
+                @dragleave.prevent="isDragging = false"
+                @drop.prevent="onDrop($event)"
+                :class="{ '!border-primary-500 !bg-primary-50 dark:!bg-primary-900/20': isDragging }"
+            >
+                <div class="flex flex-col items-center justify-center py-6">
+                    <template v-if="fieldData.value && (fieldData.value.name || field.value)">
+                        <span class="icon-product text-4xl mb-4 mr-4"></span>
+                        <div class="flex justify-between items-center mb-2 text-sm text-gray-500 dark:text-gray-400">
+                            <p class="text-sm text-gray-500 dark:text-gray-400" v-text="fieldData.value.name || field.value"></p>
+                            <button
+                                type="button"
+                                @click="clearFile"
+                                class="icon-cancel text-3xl cursor-pointer hover:bg-primary-50 dark:hover:bg-cherry-800 hover:rounded-md"
+                            >
+                            </button>
+                        </div>
+                    </template>
+                    <template v-else>
+                        <span class="icon-export text-gray-500 dark:text-gray-400 text-4xl"></span>
+                        <p class="mb-2 text-sm text-gray-500 dark:text-gray-400"><span class="font-semibold">@lang('admin::app.components.form.file-uploader.upload-cta')</span> @lang('admin::app.components.form.file-uploader.upload-hint')</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400" v-text="info"></p>
+                    </template>
+                </div>
+                            
+                <input
+                    :id="inputId"
+                    type="file"
+                    :name="name"
+                    class="hidden"
+                    :class="[errors.length ? 'border !border-red-600 hover:border-red-600' : '']"
+                    @change="handleChange"
+                    @blur="handleBlur"
+                    ref="fileInput"
+                />
+            </label>
+        </div>
+    </script>
+    
+    <script type="module">
+        app.component('v-file-uploader', {
+            template: '#v-file-uploader-template',
+
+            props: {
+                field: Object,
+                id: String,
+                info: String,
+                name: String,
+                value: String,
+                errors: {
+                    type: Array,
+                    default: () => []
+                }
+            },
+
+            computed: {
+                inputId() {
+                    return this.id || this.$.uid + '_dropzone-file';
+                },
+            },
+
+            data() {
+                return {
+                    fieldData: this.field,
+                    isDragging: false,
+                    initialValue: this.field.value,
+                }
+            },
+            mounted() {
+                this.$emitter.on('unsaved-changes:reset', this.resetToInitial);
+            },
+            beforeUnmount() {
+                this.$emitter.off('unsaved-changes:reset', this.resetToInitial);
+            },
+            watch: {
+                field: {
+                    handler(newValue) {
+                        this.fieldData = newValue;
+                    },
+                    deep: true
+                },
+                fieldData: {
+                    handler(newValue) {
+                        this.$forceUpdate();
+                    },
+                    deep: true
+                }
+                },
+            methods: {
+                handleChange(event) {
+                    const file = event.target.files[0];
+                    if (file) {
+                        this.fieldData.value = file;
+                    }
+                    this.$nextTick(() => {
+                        this.$forceUpdate();
+                    });
+                },
+                 
+                onDrop(event) {
+                    this.isDragging = false;
+
+                    const file = event.dataTransfer.files[0];
+
+                    if (! file) {
+                        return;
+                    }
+
+                    this.fieldData.value = file;
+
+                    if (this.$refs.fileInput) {
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+                        this.$refs.fileInput.files = dt.files;
+
+                        this.$refs.fileInput.dispatchEvent(new CustomEvent('unsaved-changes:touch', {
+                            bubbles: true,
+                            detail: { name: this.name },
+                        }));
+                    }
+
+                    this.$nextTick(() => {
+                        this.$forceUpdate();
+                    });
+                },
+
+                clearFile(event) {
+                    this.fieldData.value = '';
+
+                    if (this.$refs.fileInput) {
+                        this.$refs.fileInput.value = '';
+                    }
+
+                    this.$nextTick(() => {
+                        this.$forceUpdate();
+                    });
+                    event.preventDefault();
+                },
+
+                resetToInitial() {
+                    this.fieldData.value = this.initialValue;
+
+                    if (this.$refs.fileInput) {
+                        this.$refs.fileInput.value = '';
+                    }
+
+                    this.$nextTick(() => this.$forceUpdate());
+                }
+            }
+        });
+    </script>
+@endpushOnce

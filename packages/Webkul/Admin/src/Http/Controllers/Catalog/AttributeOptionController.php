@@ -1,0 +1,172 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Catalog;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Event;
+use Webkul\Admin\DataGrids\Catalog\AttributeOptionDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\AttributeOptionForm;
+use Webkul\Admin\Http\Requests\AttributeOptionSortForm;
+use Webkul\Admin\Http\Requests\AttributeOptionUpdateForm;
+use Webkul\Attribute\Enums\SwatchTypeEnum;
+use Webkul\Attribute\Repositories\AttributeOptionRepository;
+use Webkul\Attribute\Repositories\AttributeRepository;
+
+class AttributeOptionController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected AttributeOptionRepository $attributeOptionRepository,
+        protected AttributeRepository $attributeRepository,
+    ) {}
+
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(int $id): JsonResponse
+    {
+        return app(AttributeOptionDataGrid::class)->setAttributeId($id)->toJson();
+    }
+
+    /**
+     * Store a newly created option.
+     */
+    public function store(int $attributeId, AttributeOptionForm $request): JsonResponse
+    {
+        $requestData = $request->input('locales');
+
+        $requestData['attribute_id'] = $attributeId;
+
+        $requestData['code'] = $request->input('code');
+
+        $attribute = $this->attributeRepository->find($attributeId);
+
+        if (in_array($attribute->swatch_type, SwatchTypeEnum::getValues(), true)) {
+            $swatchValue = $request->file('swatch_value') ?? $request->input('swatch_value');
+
+            if ($attribute->swatch_type === 'color' && blank($swatchValue)) {
+                $swatchValue = '#000000';
+            }
+
+            $requestData['swatch_value'] = $swatchValue;
+        }
+
+        Event::dispatch('catalog.attribute.option.create.before', $requestData);
+
+        try {
+            $attribute = $this->attributeOptionRepository->create($requestData);
+        } catch (\Exception $e) {
+            report($e);
+
+            return new JsonResponse(['message' => $e->getMessage()], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+        }
+
+        Event::dispatch('catalog.attribute.option.create.after', $attribute);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.attributes.edit.option.create-success'),
+        ]);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(int $attributeId, int $id): JsonResponse
+    {
+        $option = $this->attributeOptionRepository->findOneWhere(['id' => $id, 'attribute_id' => $attributeId]);
+
+        abort_if(! $option, 404);
+
+        $option = $option->toArray();
+
+        foreach ($option['translations'] as $key => $translation) {
+            $option['locales'][$translation['locale']] = $translation['label'] ?? '';
+        }
+
+        return new JsonResponse(['option' => $option]);
+    }
+
+    /**
+     * Update attribute option
+     */
+    public function update(AttributeOptionUpdateForm $request, int $attributeId, int $id): JsonResponse
+    {
+        abort_if(! $this->attributeOptionRepository->findOneWhere(['id' => $id, 'attribute_id' => $attributeId]), 404);
+
+        $requestData = $request->input('locales') ?? [];
+
+        $attribute = $this->attributeRepository->find($attributeId);
+
+        if ($attribute && in_array($attribute->swatch_type, SwatchTypeEnum::getValues(), true)) {
+            $swatchValue = $request->file('swatch_value') ?? $request->input('swatch_value');
+
+            if ($attribute->swatch_type === 'color' && blank($swatchValue)) {
+                $swatchValue = '#000000';
+            }
+
+            $requestData['swatch_value'] = $swatchValue;
+        }
+
+        Event::dispatch('catalog.attribute.option.update.before', $id);
+
+        $option = $this->attributeOptionRepository->update($requestData, $id);
+
+        Event::dispatch('catalog.attribute.option.update.after', $option);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.attributes.edit.option.update-success'),
+        ]);
+    }
+
+    /**
+     * Updates the sort order of an attribute option based on the direction it is moved (up or down).
+     */
+    public function updateSort(AttributeOptionSortForm $request, int $attributeId): JsonResponse
+    {
+        $data = $request->validated();
+
+        $sortOrderUpdated = $this->attributeOptionRepository->updateSortOrder($data['optionIds'], $data['direction'], $data['toIndex'], $attributeId);
+
+        if (! $sortOrderUpdated) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.edit.option.sort-update-failure'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.attributes.edit.option.sort-update-success'),
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $attributeId, int $id): JsonResponse
+    {
+        abort_if(! $this->attributeOptionRepository->findOneWhere(['id' => $id, 'attribute_id' => $attributeId]), 404);
+
+        // TODO: add validation before delete to check if it is not being used in any product
+        try {
+            Event::dispatch('catalog.attribute.option.delete.before', $id);
+
+            $this->attributeOptionRepository->delete($id);
+
+            Event::dispatch('catalog.attribute.option.delete.after', $id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.edit.option.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            report($e);
+
+            return new JsonResponse([
+                'message' => $e->getMessage(),
+            ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+}

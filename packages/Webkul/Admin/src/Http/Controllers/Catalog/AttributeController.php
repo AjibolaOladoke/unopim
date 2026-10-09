@@ -1,0 +1,282 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Catalog;
+
+use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Catalog\AttributeDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\SelectableMassDestroyRequest;
+use Webkul\Attribute\Enums\SwatchTypeEnum;
+use Webkul\Attribute\Repositories\AttributeRepository;
+use Webkul\Attribute\Rules\NotSupportedAttributes;
+use Webkul\Attribute\Rules\SwatchTypes;
+use Webkul\Core\Repositories\LocaleRepository;
+use Webkul\Core\Rules\Code;
+use Webkul\Product\Repositories\ProductRepository;
+
+class AttributeController extends Controller
+{
+    public const AI_TRANSLATE_ENABLED = '1';
+
+    public const AI_TRANSLATE_DISABLED = '0';
+
+    public const VALUE_PER_LOCALE_ENABLED = 1;
+
+    public const TEXT = 'text';
+
+    public const TEXTAREA = 'textarea';
+
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected AttributeRepository $attributeRepository,
+        protected ProductRepository $productRepository,
+        protected LocaleRepository $localeRepository
+    ) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(AttributeDataGrid::class)->toJson();
+        }
+
+        return view('admin::catalog.attributes.index', ['swatchTypes' => SwatchTypeEnum::getValues()]);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create(): View
+    {
+        return view('admin::catalog.attributes.create', ['locales' => $this->localeRepository->getActiveLocales(), 'swatchTypes' => SwatchTypeEnum::getValues()]);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(): RedirectResponse
+    {
+        $this->validate(request(), [
+            'code'        => ['required', 'unique:attributes,code', new Code, new NotSupportedAttributes],
+            'type'        => 'required',
+            'swatch_type' => [
+                'required_if:type,select,multiselect',
+                'prohibited_unless:type,select,multiselect',
+                new SwatchTypes,
+            ],
+        ]);
+
+        $requestData = request()->all();
+
+        if (($requestData['validation'] ?? null) === 'none') {
+            $requestData['validation'] = null;
+        }
+
+        $requestData['ai_translate'] = self::AI_TRANSLATE_DISABLED;
+
+        if (
+            isset($requestData['value_per_locale'])
+            && $requestData['value_per_locale'] == self::VALUE_PER_LOCALE_ENABLED
+            && in_array($requestData['type'], [self::TEXT, self::TEXTAREA])
+        ) {
+            $requestData['ai_translate'] = self::AI_TRANSLATE_ENABLED;
+        }
+
+        Event::dispatch('catalog.attribute.create.before');
+
+        $attribute = $this->attributeRepository->create($requestData);
+
+        Event::dispatch('catalog.attribute.create.after', $attribute);
+
+        session()->flash('success', trans('admin::app.catalog.attributes.create-success'));
+
+        return redirect()->route('admin.catalog.attributes.edit', $attribute->id);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(int $id): View
+    {
+        $attribute = $this->attributeRepository->findOrFail($id);
+
+        $locales = $this->localeRepository->getActiveLocales();
+
+        $swatchTypes = SwatchTypeEnum::getValues();
+
+        return view('admin::catalog.attributes.edit', compact('attribute', 'locales', 'swatchTypes'));
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(int $id): RedirectResponse
+    {
+        $this->validate(request(), [
+            'code'        => ['required', 'unique:attributes,code,'.$id, new Code],
+            'type'        => 'required',
+            'swatch_type' => [
+                'required_if:type,select,multiselect',
+                'prohibited_unless:type,select,multiselect',
+                new SwatchTypes,
+            ],
+        ]);
+
+        $requestData = request()->except(['type', 'code', 'value_per_locale', 'value_per_channel', 'is_unique']);
+
+        if (empty($requestData['ai_translate'])) {
+            $requestData['ai_translate'] = self::AI_TRANSLATE_DISABLED;
+        }
+
+        Event::dispatch('catalog.attribute.update.before', $id);
+
+        $attribute = $this->attributeRepository->update($requestData, $id);
+
+        Event::dispatch('catalog.attribute.update.after', $attribute);
+
+        session()->flash('success', trans('admin::app.catalog.attributes.update-success'));
+
+        return redirect()->route('admin.catalog.attributes.edit', $id);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $id): JsonResponse
+    {
+        $attribute = $this->attributeRepository->findOrFail($id);
+
+        if (! $attribute->canBeDeleted()) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.index.datagrid.delete-failed'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if ($this->attributeCanBeDeleted($id) > 0) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.index.datagrid.delete-attribute-failure'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            Event::dispatch('catalog.attribute.delete.before', $id);
+
+            $this->attributeRepository->delete($id);
+
+            Event::dispatch('catalog.attribute.delete.after', $id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            report($e);
+
+            return new JsonResponse(['message' => $e->getMessage()], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * attribute can't be deleted for super attributes
+     */
+    public function attributeCanBeDeleted(int $id): int
+    {
+        return DB::table('product_super_attributes')
+            ->where('attribute_id', $id)
+            ->count();
+    }
+
+    /**
+     * Remove the specified resources from database.
+     */
+    public function massDestroy(SelectableMassDestroyRequest $massDestroyRequest): JsonResponse
+    {
+        $deleted = 0;
+        $inUse = 0;
+
+        foreach ($massDestroyRequest->selectedIds(AttributeDataGrid::class)->chunk(500) as $chunk) {
+            $indices = $chunk->values()->all();
+
+            $attributes = $this->attributeRepository->findWhereIn('id', $indices)->keyBy('id');
+
+            $superAttributeIds = DB::table('product_super_attributes')
+                ->whereIn('attribute_id', $indices)
+                ->distinct()
+                ->pluck('attribute_id')
+                ->flip();
+
+            foreach ($indices as $index) {
+                $attribute = $attributes->get($index);
+
+                if (
+                    ! $attribute
+                    || ! $attribute->canBeDeleted()
+                ) {
+                    continue;
+                }
+
+                if ($superAttributeIds->has($index)) {
+                    $inUse++;
+
+                    continue;
+                }
+
+                try {
+                    Event::dispatch('catalog.attribute.delete.before', $index);
+
+                    $this->attributeRepository->delete($index);
+
+                    Event::dispatch('catalog.attribute.delete.after', $index);
+
+                    $deleted++;
+                } catch (QueryException $exception) {
+                    report($exception);
+
+                    $inUse++;
+                }
+            }
+        }
+
+        if ($inUse > 0) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.index.datagrid.mass-delete-partial', ['count' => $inUse]),
+            ], $deleted > 0 ? JsonResponse::HTTP_OK : JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        if ($deleted === 0) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.attributes.index.datagrid.mass-delete-failed'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.attributes.index.datagrid.mass-delete-success'),
+        ]);
+    }
+
+    /**
+     * Get super attributes of product.
+     */
+    public function productSuperAttributes(int $id): JsonResponse
+    {
+        $product = $this->productRepository->findOrFail($id);
+
+        $superAttributes = $this->productRepository->getSuperAttributes($product);
+
+        return response()->json([
+            'data'  => $superAttributes,
+        ]);
+    }
+}

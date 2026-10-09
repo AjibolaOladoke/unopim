@@ -1,0 +1,104 @@
+<?php
+
+namespace Webkul\Theme;
+
+use Illuminate\Support\Facades\Vite;
+use Illuminate\Support\Str;
+
+class Theme
+{
+    /**
+     * Contains theme parent.
+     *
+     * @var Theme
+     */
+    public $parent;
+
+    /**
+     * Create a new theme instance.
+     *
+     * @param  string  $code
+     * @param  string  $name
+     * @param  string  $assetsPath
+     * @param  string  $viewsPath
+     */
+    public function __construct(
+        public $code,
+        public $name = null,
+        public $assetsPath = null,
+        public $viewsPath = null,
+        public $vite = []
+    ) {
+        $this->assetsPath = $assetsPath ?? $code;
+
+        $this->viewsPath = $viewsPath ?? $code;
+    }
+
+    /**
+     * Sets the parent.
+     */
+    public function setParent(Theme $parent): void
+    {
+        $this->parent = $parent;
+    }
+
+    /**
+     * Return the parent.
+     *
+     * @return Theme
+     */
+    public function getParent()
+    {
+        return $this->parent;
+    }
+
+    /**
+     * Return all the possible view paths.
+     */
+    public function getViewPaths(): array
+    {
+        $paths = [];
+
+        $theme = $this;
+
+        do {
+            if (Str::startsWith($theme->viewsPath, DIRECTORY_SEPARATOR)) {
+                $path = base_path(substr($theme->viewsPath, 1));
+            } else {
+                $path = $theme->viewsPath;
+            }
+
+            if (! in_array($path, $paths)) {
+                $paths[] = $path;
+            }
+        } while ($theme = $theme->parent);
+
+        return $paths;
+    }
+
+    /**
+     * Convert to asset url based on current theme.
+     *
+     * @return string
+     */
+    public function url(string $url)
+    {
+        $viteUrl = trim($this->vite['package_assets_directory'], '/').'/'.$url;
+
+        return Vite::useHotFile($this->vite['hot_file'])
+            ->useBuildDirectory($this->vite['build_directory'])
+            ->asset($viteUrl);
+    }
+
+    /**
+     * Set UnoPim vite.
+     *
+     * @return \Illuminate\Foundation\Vite
+     */
+    public function setUnoPimVite(array $entryPoints)
+    {
+        return Vite::useHotFile($this->vite['hot_file'])
+            ->useBuildDirectory($this->vite['build_directory'])
+            ->withEntryPoints($entryPoints);
+    }
+}

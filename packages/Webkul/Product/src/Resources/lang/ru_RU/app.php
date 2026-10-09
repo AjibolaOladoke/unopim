@@ -1,0 +1,24 @@
+<?php
+
+return [
+    'acl' => [
+        'variant-structures' => 'Структуры вариантов',
+    ],
+
+    'datagrid' => [
+        'copy-of-slug'                  => 'копия - :value',
+        'copy-of'                       => 'копия :value',
+        'variant-already-exist-message' => 'Вариант с такими же параметрами атрибутов уже существует.',
+    ],
+
+    'response' => [
+        'product-can-not-be-copied' => 'Продукты типа :type не могут быть скопированы',
+    ],
+
+    'type'     => [
+        'configurable'  => 'Настраиваемый',
+        'simple'        => 'Простой',
+        'variant-group' => 'Группа вариантов',
+        'variant_group' => 'Группа вариантов',
+    ],
+];

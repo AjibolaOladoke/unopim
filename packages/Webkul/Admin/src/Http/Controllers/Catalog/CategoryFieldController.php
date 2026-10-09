@@ -1,0 +1,216 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Catalog;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Event;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Catalog\CategoryFieldDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\CategoryFieldForm;
+use Webkul\Admin\Http\Requests\SelectableMassDestroyRequest;
+use Webkul\Admin\Http\Requests\SelectableMassUpdateRequest;
+use Webkul\Category\Repositories\CategoryFieldRepository;
+use Webkul\Category\Repositories\CategoryRepository;
+use Webkul\Core\Repositories\LocaleRepository;
+
+class CategoryFieldController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected CategoryFieldRepository $categoryFieldRepository,
+        protected CategoryRepository $categoryRepository,
+        protected LocaleRepository $localeRepository
+    ) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(CategoryFieldDataGrid::class)->toJson();
+        }
+
+        return view('admin::catalog.categories.field.index');
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create(): View
+    {
+        return view('admin::catalog.categories.field.create', ['locales' => $this->localeRepository->getActiveLocales()]);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(CategoryFieldForm $request): RedirectResponse|JsonResponse
+    {
+        $requestData = array_merge([
+            'status'   => 1,
+            'position' => 0,
+            'section'  => 'left',
+        ], request()->all());
+
+        if (($requestData['validation'] ?? null) === 'none') {
+            $requestData['validation'] = null;
+        }
+
+        Event::dispatch('catalog.category_field.create.before');
+
+        $attribute = $this->categoryFieldRepository->create($requestData);
+
+        Event::dispatch('catalog.category_field.create.after', $attribute);
+
+        session()->flash('success', trans('admin::app.catalog.category_fields.create-success'));
+
+        return redirect()->route('admin.catalog.category_fields.edit', $attribute->id);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(int $id): View
+    {
+        return view('admin::catalog.categories.field.edit', [
+            'categoryField' => $this->categoryFieldRepository->findOrFail($id),
+            'locales'       => $this->localeRepository->getActiveLocales(),
+        ]);
+    }
+
+    /**
+     * Get attribute options associated with attribute.
+     */
+    public function getCategoryFieldOptions(int $id): Collection
+    {
+        $categoryField = $this->categoryFieldRepository->findOrFail($id);
+
+        return $categoryField->options()->orderBy('sort_order')->get();
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(CategoryFieldForm $request, int $id): RedirectResponse
+    {
+        $requestData = request()->except(['code', 'type', '_options_dirty']);
+
+        Event::dispatch('catalog.category_field.update.before', $id);
+
+        $categoryField = $this->categoryFieldRepository->update($requestData, $id);
+
+        Event::dispatch('catalog.category_field.update.after', $categoryField);
+
+        session()->flash('success', trans('admin::app.catalog.category_fields.update-success'));
+
+        return redirect()->route('admin.catalog.category_fields.edit', $id);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $id): JsonResponse
+    {
+        $category = $this->categoryFieldRepository->findOrFail($id);
+
+        if (! $category->canBeDeleted()) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.category_fields.index.datagrid.delete-failed'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            Event::dispatch('catalog.category_field.delete.before', $id);
+
+            $this->categoryFieldRepository->delete($id);
+
+            Event::dispatch('catalog.category_field.delete.after', $id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.category_fields.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            report($e);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.category_fields.delete-failed'),
+        ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Remove the specified resources from database.
+     */
+    public function massDestroy(SelectableMassDestroyRequest $massDestroyRequest): JsonResponse
+    {
+        $indices = $massDestroyRequest->selectedIds(CategoryFieldDataGrid::class);
+        $delete = false;
+
+        foreach ($indices as $index) {
+            Event::dispatch('catalog.category_field.delete.before', $index);
+
+            $category = $this->categoryFieldRepository->find($index);
+
+            if (! $category->canBeDeleted()) {
+                continue;
+            }
+
+            $this->categoryFieldRepository->delete($index);
+            $delete = true;
+
+            Event::dispatch('catalog.category_field.delete.after', $index);
+        }
+
+        if (! $delete) {
+            return new JsonResponse([
+                'message' => trans('admin::app.catalog.category_fields.index.datagrid.mass-delete-failed'),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.category_fields.index.datagrid.mass-delete-success'),
+        ]);
+    }
+
+    /**
+     * Updates the status of category fields
+     */
+    public function massUpdate(SelectableMassUpdateRequest $massUpdateRequest): JsonResponse
+    {
+        $categoryFieldIds = $massUpdateRequest->selectedIds(CategoryFieldDataGrid::class);
+
+        $value = $massUpdateRequest->input('value');
+
+        foreach ($categoryFieldIds as $fieldId) {
+            try {
+                Event::dispatch('catalog.category_field.update.before', $fieldId);
+
+                $this->categoryFieldRepository->update([
+                    'status' => $value,
+                ], $fieldId);
+
+                Event::dispatch('catalog.category_field.update.after', $fieldId);
+            } catch (\Exception $e) {
+                report($e);
+
+                return new JsonResponse([
+                    'message' => $e->getMessage(),
+                ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        return new JsonResponse([
+            'message' => trans('admin::app.catalog.category_fields.index.datagrid.mass-update-success'),
+        ], JsonResponse::HTTP_OK);
+    }
+}

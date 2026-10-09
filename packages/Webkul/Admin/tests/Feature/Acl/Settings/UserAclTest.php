@@ -1,0 +1,95 @@
+<?php
+
+use Webkul\User\Models\Admin;
+use Webkul\User\Models\Role;
+
+it('should not display the users list if does not have permission', function () {
+    $this->loginWithPermissions();
+
+    $this->get(route('admin.settings.users.index'))
+        ->assertStatus(403);
+});
+
+it('should display the users list if has permission', function () {
+    $this->loginWithPermissions(permissions: ['dashboard', 'settings.users.users']);
+
+    $this->get(route('admin.settings.users.index'))
+        ->assertStatus(200)
+        ->assertSeeText(trans('admin::app.settings.users.index.title'));
+});
+
+it('should not create the user if does not have permission', function () {
+    $this->loginWithPermissions();
+
+    $this->post(route('admin.settings.users.store'))
+        ->assertStatus(403);
+});
+
+it('should create the user if has permission', function () {
+    $this->loginWithPermissions(permissions: ['dashboard', 'settings.users.users.create']);
+
+    $customRole = Role::factory()->create([
+        'permission_type' => 'custom',
+        'permissions'     => ['dashboard'],
+    ]);
+
+    $response = $this->post(route('admin.settings.users.store'), [
+        'name'                  => 'test',
+        'email'                 => 'test@example.com',
+        'password'              => 'admin1234',
+        'status'                => 1,
+        'role_id'               => $customRole->id,
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+        'password_confirmation' => 'admin1234',
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas('admins', [
+        'email' => 'test@example.com',
+    ]);
+});
+
+it('should not display the user edit form if does not have permission', function () {
+    $this->loginWithPermissions();
+    $user = Admin::first();
+
+    $this->get(route('admin.settings.users.edit', ['id' => $user->id]))
+        ->assertStatus(403);
+});
+
+it('should display the user edit form if has permission', function () {
+    $this->loginWithPermissions(permissions: ['dashboard', 'settings.users.users.edit']);
+    $user = Admin::first();
+
+    $response = $this->getJson(route('admin.settings.users.edit', ['id' => $user->id]));
+    $response->assertStatus(200);
+    $response->assertJson([
+        'user' => $user->toArray(),
+    ]);
+});
+
+it('should not be able to delete user if does not have permission', function () {
+    $this->loginWithPermissions();
+    $user = Admin::first();
+
+    $this->delete(route('admin.settings.users.delete', ['id' => $user->id]))
+        ->assertStatus(403);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class),
+        ['id' => $user->id]
+    );
+});
+
+it('should be able to delete user if has permission', function () {
+    $this->loginWithPermissions(permissions: ['dashboard', 'settings.users.users.delete']);
+    $user = Admin::factory()->create();
+
+    $response = $this->delete(route('admin.settings.users.delete', ['id' => $user->id]));
+    $response->assertOk();
+
+    $this->assertDatabaseMissing($this->getFullTableName(Admin::class), [
+        'id' => $user->id,
+    ]);
+});

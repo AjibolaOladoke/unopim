@@ -1,0 +1,435 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\MagicAI;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
+use Illuminate\View\View;
+use Laravel\Ai\AnonymousAgent;
+use Webkul\Admin\DataGrids\MagicAI\MagicAIPlatformDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Admin\Http\Requests\MagicAI\FetchModelsRequest;
+use Webkul\Admin\Http\Requests\MagicAI\PlatformRequest;
+use Webkul\Admin\Http\Requests\MagicAI\PlatformTestRequest;
+use Webkul\AiAgent\Chat\AiErrorResolver;
+use Webkul\MagicAI\Enums\AiProvider;
+use Webkul\MagicAI\Repository\MagicAIPlatformRepository;
+use Webkul\MagicAI\Services\ManagedPlatform;
+use Webkul\MagicAI\Services\ModelDiscovery;
+use Webkul\MagicAI\Services\ProviderOverrides;
+use Webkul\MagicAI\Services\ScopedProviderConfig;
+use Webkul\MagicAI\Support\ModelRecommender;
+use Webkul\MagicAI\Validator\PlatformValidator;
+
+class MagicAIPlatformController extends Controller
+{
+    /**
+     * Ticked text models tried in turn before a connection test fails, since a
+     * provider can list a model the account is not allowed to call.
+     */
+    private const CONNECTION_TEST_ATTEMPTS = 3;
+
+    public function __construct(
+        protected MagicAIPlatformRepository $platformRepository,
+    ) {
+        $this->middleware(function ($request, $next) {
+            if (! bouncer()->hasPermission('ai-agent.platform')) {
+                abort(403);
+            }
+
+            return $next($request);
+        });
+    }
+
+    public function index(): View|JsonResponse
+    {
+        if (request()->ajax()) {
+            return app(MagicAIPlatformDataGrid::class)->toJson();
+        }
+
+        $platformCount = $this->platformRepository->count();
+        $hasDefault = $this->platformRepository->getDefault() !== null;
+
+        return view('admin::configuration.magic-ai.platform.index', [
+            'providerOptions' => AiProvider::options(),
+            'platformCount'   => $platformCount,
+            'hasDefault'      => $hasDefault,
+        ]);
+    }
+
+    public function store(PlatformRequest $request): JsonResponse
+    {
+        $data = $request->only(['label', 'provider', 'api_url', 'api_key', 'models', 'is_default', 'status']);
+
+        $this->validateModelNames($data['models']);
+        $this->platformValidator()->validateApiUrl($data['provider'] ?? null, $data['api_url'] ?? null);
+
+        if (! isset($data['status'])) {
+            $data['status'] = true;
+        }
+
+        if (! isset($data['is_default'])) {
+            $data['is_default'] = false;
+        }
+
+        $this->ensureDefaultPlatformIsEnabled($data);
+
+        $extras = ProviderOverrides::decode(request()->input('extras'));
+        if ($extras !== []) {
+            $data['extras'] = $extras;
+        }
+
+        $this->platformRepository->create($data);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.configuration.platform.message.save-success'),
+        ]);
+    }
+
+    public function edit(int $id): JsonResponse
+    {
+        $platform = $this->platformRepository->findOrFail($id);
+
+        $apiKeyError = $platform->apiKeyError();
+
+        return new JsonResponse([
+            'data' => [
+                'id'                => $platform->id,
+                'label'             => $platform->label,
+                'provider'          => $platform->provider,
+                'api_url'           => $platform->api_url,
+                'api_key'           => $apiKeyError ? '' : ($platform->safeApiKey() ? '********' : ''),
+                'models'            => $platform->models,
+                'extras'            => $platform->extras ? json_encode($platform->extras) : '',
+                'is_default'        => $platform->is_default,
+                'is_managed'        => $platform->is_managed,
+                'status'            => $platform->status,
+                'api_key_corrupted' => $apiKeyError !== null,
+            ],
+            'message' => $apiKeyError
+                ? trans('admin::app.configuration.platform.message.api-key-corrupted', ['error' => $apiKeyError])
+                : null,
+        ]);
+    }
+
+    public function update(PlatformRequest $request, int $id): JsonResponse
+    {
+        $platform = $this->platformRepository->find($id);
+
+        if (! $platform) {
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.not-found'),
+            ], JsonResponse::HTTP_NOT_FOUND);
+        }
+
+        $data = request()->only(['label', 'provider', 'api_url', 'models', 'is_default', 'status']);
+
+        $this->validateModelNames($data['models']);
+        $this->platformValidator()->validateApiUrl($data['provider'] ?? null, $data['api_url'] ?? null);
+
+        if (! isset($data['status'])) {
+            $data['status'] = false;
+        }
+
+        if (! isset($data['is_default'])) {
+            $data['is_default'] = false;
+        }
+
+        $this->ensureDefaultPlatformIsEnabled($data);
+
+        $managedPlatform = app(ManagedPlatform::class);
+
+        $apiKey = $request->validated('api_key');
+
+        if (! $managedPlatform->usesStoredKey($apiKey)) {
+            $data['api_key'] = $apiKey;
+        }
+
+        if ($request->has('extras')) {
+            $data['extras'] = ProviderOverrides::decode($request->validated('extras'));
+        }
+
+        if ($managedPlatform->changesLockedFields($platform, $data)) {
+            throw ValidationException::withMessages([
+                'platform' => trans('admin::app.configuration.platform.message.managed-cli-only'),
+            ]);
+        }
+
+        $this->platformRepository->update($data, $id);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.configuration.platform.message.update-success'),
+        ]);
+    }
+
+    public function destroy(int $id): JsonResponse
+    {
+        try {
+            $platform = $this->platformRepository->findOrFail($id);
+
+            if ($platform->is_managed) {
+                return new JsonResponse([
+                    'message' => trans('admin::app.configuration.platform.message.managed-cannot-delete'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            }
+
+            if ($platform->is_default) {
+                return new JsonResponse([
+                    'message' => trans('admin::app.configuration.platform.message.cannot-delete-default'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            }
+
+            $this->platformRepository->delete($id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            Log::error($e);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.delete-fail'),
+            ], JsonResponse::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public function setDefault(int $id): JsonResponse
+    {
+        $platform = $this->platformRepository->findOrFail($id);
+
+        if (! $platform->status) {
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.default-requires-enabled'),
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $this->platformRepository->makeDefault($id);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.configuration.platform.message.set-default-success'),
+        ]);
+    }
+
+    public function testConnection(PlatformTestRequest $request): JsonResponse
+    {
+        if (! bouncer()->hasPermission('ai-agent.platform')) {
+            abort(403);
+        }
+
+        if (! $this->platformValidator()->isSafeApiUrl(request()->input('api_url'))) {
+            return new JsonResponse([
+                'success' => false,
+                'message' => trans('admin::app.configuration.platform.message.test-fail'),
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        try {
+            $provider = AiProvider::from(request()->input('provider'));
+
+            // Custom providers route through the openai-compatible driver, so
+            // without an explicit api_url the request would fall back to the
+            // global env URL and ship the caller's API key to the wrong host.
+            if ($provider === AiProvider::Custom && empty(trim((string) request()->input('api_url')))) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => trans('admin::app.configuration.platform.message.test-fail').': '.trans('admin::app.configuration.platform.message.custom-api-url-required'),
+                ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            $models = array_values(array_filter(array_map(
+                'trim',
+                explode(',', (string) request()->input('models'))
+            )));
+
+            $candidates = array_slice(ModelRecommender::textModels($models), 0, self::CONNECTION_TEST_ATTEMPTS);
+
+            if ($candidates === []) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => trans('admin::app.configuration.platform.message.test-fail').': '.trans('admin::app.configuration.platform.message.no-test-model'),
+                ], JsonResponse::HTTP_BAD_REQUEST);
+            }
+
+            $agent = new AnonymousAgent(
+                instructions: 'You are a connectivity test bot. Reply with the single word OK.',
+                messages: [],
+                tools: [],
+            );
+
+            $failure = null;
+
+            foreach ($candidates as $model) {
+                try {
+                    ScopedProviderConfig::run(
+                        $provider->configKey(),
+                        $this->providerOverridesFromRequest(),
+                        fn () => $agent->prompt(
+                            'Say OK',
+                            provider: $provider->toLab(),
+                            model: $model,
+                            timeout: 15,
+                        ),
+                    );
+
+                    $failure = null;
+
+                    break;
+                } catch (\Throwable $e) {
+                    $failure ??= $e;
+                }
+            }
+
+            if ($failure instanceof \Throwable) {
+                throw $failure;
+            }
+
+            return new JsonResponse([
+                'success' => true,
+                'message' => trans('admin::app.configuration.platform.message.test-success'),
+            ]);
+        } catch (\Throwable $e) {
+            $resolved = AiErrorResolver::resolve($e);
+
+            // Always use the resolver's message: known errors get the localized
+            // user-friendly text (rate limit / overloaded / too large), and
+            // unknown errors go through sanitizeRawMessage which extracts the
+            // underlying upstream HTTP response body when the gateway's own
+            // message is just an "Unknown error" placeholder.
+            $detail = $resolved['message'];
+
+            // Custom platforms route through laravel/ai's OpenAI-compatible
+            // gateway for the /chat/completions endpoint. Its error messages
+            // hardcode the driver's name (e.g. "OpenAI-compatible Error" when
+            // the actual HTTP call went to Cerebras). Rewrite the prefix so
+            // the message accurately reflects the user's selected provider.
+            if (request()->input('provider') === AiProvider::Custom->value) {
+                $detail = preg_replace(
+                    '/^(OpenAI-compatible|Groq) Error\b/',
+                    trans('admin::app.configuration.platform.message.custom-provider-error'),
+                    $detail,
+                );
+            }
+
+            return new JsonResponse([
+                'success' => false,
+                'message' => trans('admin::app.configuration.platform.message.test-fail').': '.$detail,
+            ], $resolved['is_known'] ? $resolved['status'] : JsonResponse::HTTP_BAD_REQUEST);
+        }
+    }
+
+    public function fetchModels(FetchModelsRequest $request): JsonResponse
+    {
+        if (! bouncer()->hasPermission('ai-agent.platform')) {
+            abort(403);
+        }
+
+        if (! $this->platformValidator()->isSafeApiUrl(request()->input('api_url'))) {
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.fetch-models-fail'),
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $managedPlatform = app(ManagedPlatform::class);
+
+        $platform = $managedPlatform->usesStoredKey(request()->input('api_key'))
+            ? $this->platformRepository->find((int) request()->input('id'))
+            : null;
+
+        if ($platform && $managedPlatform->isManagedPlatform($platform)) {
+            $models = $managedPlatform->models($platform);
+
+            return new JsonResponse([
+                'models'      => $models,
+                'recommended' => ModelRecommender::recommend($models),
+                'api_url'     => $managedPlatform->apiUrl($platform),
+            ]);
+        }
+
+        try {
+            $provider = AiProvider::from(request()->input('provider'));
+            $discovery = app(ModelDiscovery::class)->discover(
+                $provider,
+                $this->resolveApiKey(),
+                request()->input('api_url'),
+            );
+
+            $models = ModelRecommender::chatCapable($discovery['models']);
+
+            $recommended = ModelRecommender::recommend($models, released: $discovery['released']);
+
+            return new JsonResponse([
+                'models'      => $models,
+                'recommended' => $recommended,
+                'api_url'     => $discovery['api_url'],
+            ]);
+        } catch (\Exception $e) {
+            return new JsonResponse([
+                'message' => trans('admin::app.configuration.platform.message.fetch-models-fail').': '.$e->getMessage(),
+            ], JsonResponse::HTTP_BAD_REQUEST);
+        }
+    }
+
+    /**
+     * Validate each model name in the comma-separated models string.
+     *
+     * @throws ValidationException
+     */
+    protected function validateModelNames(string &$models): void
+    {
+        $models = $this->platformValidator()->validateModelNames($models);
+    }
+
+    /**
+     * A platform cannot be marked default unless it is also enabled.
+     *
+     * @throws ValidationException
+     */
+    protected function ensureDefaultPlatformIsEnabled(array $data): void
+    {
+        $this->platformValidator()->ensureDefaultIsEnabled($data);
+    }
+
+    protected function platformValidator(): PlatformValidator
+    {
+        return app(PlatformValidator::class);
+    }
+
+    /**
+     * Resolve the real API key. If the submitted key is masked (********),
+     * fetch the original key from the database record.
+     */
+    protected function resolveApiKey(): ?string
+    {
+        $apiKey = request()->input('api_key');
+        $platformId = request()->input('id');
+
+        if ($apiKey && preg_match('/^\*+$/', $apiKey) && $platformId) {
+            $platform = $this->platformRepository->find($platformId);
+
+            return $platform?->safeApiKey();
+        }
+
+        return $apiKey;
+    }
+
+    /**
+     * Build the laravel/ai provider overrides from request data so Test
+     * Connection honours custom api_url / api_key / extras for the chosen
+     * platform. Applied via ScopedProviderConfig for the test call only.
+     *
+     * @return array<string, mixed>
+     */
+    protected function providerOverridesFromRequest(): array
+    {
+        $overrides = [
+            'key' => $this->resolveApiKey(),
+        ];
+
+        if (request()->input('api_url')) {
+            $overrides['url'] = request()->input('api_url');
+        }
+
+        return ProviderOverrides::build($overrides, request()->input('extras'));
+    }
+}

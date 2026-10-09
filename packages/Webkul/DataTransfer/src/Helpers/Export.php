@@ -1,0 +1,496 @@
+<?php
+
+namespace Webkul\DataTransfer\Helpers;
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Psr\Log\LoggerInterface;
+use Webkul\DataTransfer\Buffer\FileBuffer;
+use Webkul\DataTransfer\Contracts\JobTrack as JobTrackContract;
+use Webkul\DataTransfer\Contracts\JobTrackBatch as JobTrackBatchContract;
+use Webkul\DataTransfer\Helpers\Concerns\TracksJobHeartbeat;
+use Webkul\DataTransfer\Helpers\Exporters\AbstractExporter;
+use Webkul\DataTransfer\Jobs\Export\File\FlatItemBuffer as FileExportFileBuffer;
+use Webkul\DataTransfer\Repositories\JobTrackBatchRepository;
+use Webkul\DataTransfer\Repositories\JobTrackRepository;
+use Webkul\DataTransfer\Services\JobLogger;
+
+class Export
+{
+    use TracksJobHeartbeat;
+
+    /**
+     * export state for pending export
+     */
+    public const STATE_PENDING = 'pending';
+
+    /**
+     * export state for validated export
+     */
+    public const STATE_VALIDATED = 'validated';
+
+    /**
+     * export state for processing export
+     */
+    public const STATE_PROCESSING = 'processing';
+
+    /**
+     * export state for processed export
+     */
+    public const STATE_PROCESSED = 'processed';
+
+    /**
+     * export state for linking export
+     */
+    public const STATE_LINKING = 'linking';
+
+    /**
+     * export state for linked export
+     */
+    public const STATE_LINKED = 'linked';
+
+    /**
+     * export state for indexing export
+     */
+    public const STATE_INDEXING = 'indexing';
+
+    /**
+     * export state for indexed export
+     */
+    public const STATE_INDEXED = 'indexed';
+
+    /**
+     * export state for completed export
+     */
+    public const STATE_COMPLETED = 'completed';
+
+    /**
+     * export state for paused export
+     */
+    public const STATE_PAUSED = 'paused';
+
+    /**
+     * export state for cancelled export
+     */
+    public const STATE_CANCELLED = 'cancelled';
+
+    /**
+     * export state for failed export
+     */
+    public const STATE_FAILED = 'failed';
+
+    /**
+     * Validation strategy for skipping the error during the export process
+     */
+    public const VALIDATION_STRATEGY_SKIP_ERRORS = 'skip-errors';
+
+    /**
+     * Validation strategy for stopping the export process on error
+     */
+    public const VALIDATION_STRATEGY_STOP_ON_ERROR = 'stop-on-errors';
+
+    /**
+     * Action constant for updating/creating for the resource
+     */
+    public const ACTION_APPEND = 'append';
+
+    /**
+     * Action constant for deleting the resource
+     */
+    public const ACTION_DELETE = 'delete';
+
+    /**
+     * JobTrackContract instance.
+     */
+    protected JobTrackContract $export;
+
+    /**
+     * Error helper instance.
+     *
+     * @var Error
+     */
+    protected $typeExporter;
+
+    /**
+     * Resource for data read
+     */
+    protected $source;
+
+    /**
+     * Job specific logger
+     */
+    protected $jobLogger;
+
+    protected $exportBuffer;
+
+    /**
+     * Create a new helper instance.
+     */
+    public function __construct(
+        protected JobTrackRepository $jobTrackRepository,
+        protected JobTrackBatchRepository $jobTrackBatchRepository,
+        protected Error $errorHelper
+    ) {}
+
+    /**
+     * Set export instance.
+     */
+    public function setExport(JobTrackContract $export): self
+    {
+        $this->export = $export;
+
+        return $this;
+    }
+
+    /**
+     * Set job logger instance.
+     */
+    public function setLogger(LoggerInterface $logger): self
+    {
+        $this->jobLogger = $logger;
+
+        return $this;
+    }
+
+    public function setExportBuffer($exportBuffer): self
+    {
+        $this->exportBuffer = $exportBuffer;
+
+        return $this;
+    }
+
+    /**
+     * Get logger instance for this job
+     */
+    public function getLogger(): LoggerInterface
+    {
+        return $this->jobLogger;
+    }
+
+    /**
+     * Returns export instance.
+     */
+    public function getExport(): JobTrackContract
+    {
+        return $this->export;
+    }
+
+    /**
+     * Returns error helper instance.
+     */
+    public function getErrorHelper(): Error
+    {
+        return $this->errorHelper;
+    }
+
+    /**
+     * Starts import process
+     */
+    public function isValid(): bool
+    {
+        return $this->export->state != self::STATE_FAILED;
+    }
+
+    public function stateUpdate($state = self::STATE_VALIDATED): Export
+    {
+        $export = $this->jobTrackRepository->update([
+            'state' => $state,
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        $this->heartbeat(force: true);
+
+        return $this;
+    }
+
+    protected function getHeartbeatTrack(): mixed
+    {
+        return $this->export ?? null;
+    }
+
+    /**
+     * Started the import process
+     */
+    public function started(): void
+    {
+        $export = $this->jobTrackRepository->update([
+            'state'      => self::STATE_PROCESSING,
+            'started_at' => now(),
+            'summary'    => [],
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        $this->heartbeat(force: true);
+
+        Event::dispatch('data_transfer.exports.started', $export);
+
+        $typeExporter = $this->getTypeExporter()->setSource($this->source);
+
+        $typeExporter->initializeBatches();
+    }
+
+    /**
+     * Starts import process
+     */
+    public function start(?JobTrackBatchContract $exportBatch = null, ?string $queue = null): bool
+    {
+        DB::beginTransaction();
+        try {
+            $typeExporter = $this->getTypeExporter();
+            $typeExporter->queue = $queue;
+            $typeExporter->exportData($exportBatch);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    /**
+     * Start the import process
+     */
+    public function completed(): void
+    {
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAl)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'processed')} as DECIMAl)) AS processed"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'skipped')} as DECIMAl)) AS skipped"),
+            )
+            ->where('job_track_id', $this->export->id)
+            ->groupBy('job_track_id')
+            ->first()?->toArray();
+
+        $summary ??= [
+            'processed' => 0,
+            'created'   => 0,
+            'skipped'   => 0,
+        ];
+
+        $export = $this->jobTrackRepository->update([
+            'state'        => self::STATE_COMPLETED,
+            'summary'      => $summary,
+            'completed_at' => now(),
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        Event::dispatch('data_transfer.export.completed', $export);
+
+        $this->jobLogger->info(trans('data_transfer::app.job.completed'));
+    }
+
+    /**
+     * Pause the export process
+     */
+    public function pause(): void
+    {
+        $export = $this->jobTrackRepository->update([
+            'state' => self::STATE_PAUSED,
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        Event::dispatch('data_transfer.exports.paused', $export);
+    }
+
+    /**
+     * Resume a paused export by restoring state and re-dispatching pending batches.
+     */
+    public function resume(): void
+    {
+        $export = $this->jobTrackRepository->update([
+            'state' => self::STATE_PROCESSING,
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        if (! $this->jobLogger) {
+            $this->setLogger(JobLogger::make($this->export->id));
+        }
+
+        $this->jobLogger->info('Export resumed — re-dispatching pending batches.');
+
+        $this->start();
+
+        Event::dispatch('data_transfer.exports.resumed', $export);
+    }
+
+    /**
+     * Cancel the export process
+     */
+    public function cancel(): void
+    {
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'processed')} as DECIMAL)) AS processed"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAL)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'skipped')} as DECIMAL)) AS skipped"),
+            )
+            ->where('job_track_id', $this->export->id)
+            ->groupBy('job_track_id')
+            ->first()?->toArray();
+
+        $export = $this->jobTrackRepository->update([
+            'state'        => self::STATE_CANCELLED,
+            'summary'      => $summary ?? [],
+            'completed_at' => now(),
+        ], $this->export->id);
+
+        $this->setExport($export);
+
+        Event::dispatch('data_transfer.exports.cancelled', $export);
+    }
+
+    /**
+     * Check if export is in a state that should stop processing
+     */
+    public function shouldStop(): bool
+    {
+        $this->export->refresh();
+
+        return in_array($this->export->state, [self::STATE_PAUSED, self::STATE_CANCELLED, self::STATE_FAILED]);
+    }
+
+    public function flush($exportBuffer): static
+    {
+        if (empty($exportBuffer)) {
+            return $this;
+        }
+
+        $typeExporter = $this->getTypeExporter();
+        $filters = $typeExporter->getFilters();
+
+        $directory = sprintf('exports/%s/%s', $this->export->id, FileBuffer::FOLDER_PREFIX);
+        $fileName = $typeExporter->getFileName();
+
+        $buffer = resolve(FileExportFileBuffer::class)->initialize(
+            $directory,
+            $fileName,
+            $typeExporter->getExportParameter()
+        );
+
+        foreach ($exportBuffer as $item) {
+            $buffer->addData($item);
+        }
+
+        $buffer->writerClose();
+
+        $filePath = $buffer->getFilePath();
+        $this->uploadFile(
+            $filePath->getFilePath(),
+            $filePath->getTemporaryPath(),
+            $filters
+        );
+
+        return $this;
+    }
+
+    /**
+     * Returns import stats
+     */
+    public function stats(string $state): array
+    {
+        $total = $this->export->batches()->count();
+        $completed = $this->export->batches()->where('state', $state)->count();
+
+        $progress = $total
+            ? round($completed / $total * 100)
+            : 0;
+
+        $grammar = DB::rawQueryGrammar();
+
+        $summary = $this->jobTrackBatchRepository
+            ->select(
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'processed')} as DECIMAL)) AS processed"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'created')} as DECIMAL)) AS created"),
+                DB::raw("SUM(CAST({$grammar->jsonExtract('summary', 'skipped')} as DECIMAL)) AS skipped"),
+            )
+            ->where('job_track_id', $this->export->id)
+            ->where('state', $state)
+            ->groupBy('job_track_id')
+            ->first()
+            ?->toArray();
+
+        return [
+            'batches' => [
+                'total'     => $total,
+                'completed' => $completed,
+                'remaining' => $total - $completed,
+            ],
+            'progress' => $progress,
+            'summary'  => $summary ?? [
+                'processed' => 0,
+                'created'   => 0,
+                'skipped'   => 0,
+            ],
+        ];
+    }
+
+    /**
+     * Start the import process
+     */
+    public function uploadFile(string $filePath, string $temporaryPath, array $filters): void
+    {
+        $withMedia = (bool) ($filters['with_media'] ?? false);
+        $filePath = $withMedia ? $temporaryPath : $filePath;
+        $this->jobTrackRepository->update([
+            'file_path' => $filePath,
+        ], $this->export->id);
+    }
+
+    /**
+     * Validates source file and returns validation result
+     */
+    public function getTypeExporter(): AbstractExporter
+    {
+        $jobInstance = $this->export->jobInstance;
+
+        if (! $this->typeExporter) {
+            $entityType = $this->resolveEntityType($jobInstance->entity_type);
+            $exporterConfig = config('exporters.'.$entityType, config('quick_exporters.'.$entityType));
+
+            if (! is_array($exporterConfig) || ! isset($exporterConfig['exporter'], $exporterConfig['source'])) {
+                throw new \UnexpectedValueException(sprintf(
+                    'Exporter configuration not found for entity type [%s].',
+                    $jobInstance->entity_type
+                ));
+            }
+
+            $this->typeExporter = app()->make($exporterConfig['exporter'])
+                ->setExport($this->export)
+                ->setLogger($this->jobLogger)
+                ->setExportBuffer($this->exportBuffer)
+                ->setErrorHelper($this->errorHelper);
+
+            $this->source = app()->make($exporterConfig['source']);
+        }
+
+        return $this->typeExporter;
+    }
+
+    /**
+     * Resolve legacy entity types to the current config keys.
+     */
+    protected function resolveEntityType(string $entityType): string
+    {
+        return match ($entityType) {
+            'product'  => 'products',
+            'category' => 'categories',
+            'currency' => 'currencies',
+            'role'     => 'roles',
+            'user'     => 'users',
+            default    => $entityType,
+        };
+    }
+}

@@ -1,0 +1,410 @@
+<?php
+
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Webkul\User\Models\Admin;
+
+use function Pest\Laravel\get;
+
+it('should returns the user index page', function () {
+    $this->loginAsAdmin();
+
+    get(route('admin.settings.users.index'))
+        ->assertStatus(200)
+        ->assertSeeText(trans('admin::app.settings.users.index.title'));
+});
+
+it('should return the user as json for edit', function () {
+    $this->loginAsAdmin();
+
+    $user = Admin::factory()->create();
+
+    $response = $this->getJson(route('admin.settings.users.edit', ['id' => $user->id]));
+
+    $response->assertStatus(200)
+        ->assertJsonFragment([
+            ...$user->toArray(),
+            'status' => $user->status ? true : false,
+        ]);
+});
+
+it('should return the users datagrid', function () {
+    $this->loginAsAdmin();
+    Admin::factory()->create();
+
+    $response = $this->withHeaders(['X-Requested-With' => 'XMLHttpRequest'])->json('GET', route('admin.settings.users.index'));
+
+    $data = $response->json();
+
+    $this->assertArrayHasKey('records', $data);
+    $this->assertArrayHasKey('columns', $data);
+    $this->assertNotEmpty($data['records']);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'id'    => $data['records'][0]['user_id'],
+        'email' => $data['records'][0]['email'],
+    ]);
+});
+
+it('should store the newly created admin', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->post(route('admin.settings.users.store'), [
+        'name'                  => 'test',
+        'email'                 => 'test@example.com',
+        'password'              => 'admin1234',
+        'status'                => 1,
+        'role_id'               => 1,
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+        'password_confirmation' => 'admin1234',
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'email' => 'test@example.com',
+    ]);
+});
+
+it('should update the user', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'update@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+    ]);
+
+    $response = $this->put(route('admin.settings.users.update'), [
+        'id'               => $admin->id,
+        'email'            => 'update@example.com',
+        'name'             => 'testadmin',
+        'status'           => 1,
+        'role_id'          => 1,
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+        'password'         => '',
+        'current_password' => 'password',
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'name'  => 'testadmin',
+        'email' => 'update@example.com',
+    ]);
+});
+
+it('should update the user with image', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'update@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+    ]);
+
+    Storage::fake();
+
+    $response = $this->put(route('admin.settings.users.update'), [
+        'id'               => $admin->id,
+        'email'            => 'update@example.com',
+        'name'             => 'testadmin',
+        'status'           => 1,
+        'role_id'          => 1,
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+        'password'         => '',
+        'current_password' => 'password',
+        'image'            => [
+            UploadedFile::fake()->image('avatar.jpg'),
+        ],
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'name'  => 'testadmin',
+        'email' => 'update@example.com',
+    ]);
+});
+
+it('should not remove image when user is updated', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'update@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+        'image'        => 'user/2/image.jpg',
+    ]);
+
+    $response = $this->put(route('admin.settings.users.update'), [
+        'id'               => $admin->id,
+        'email'            => 'update@example.com',
+        'name'             => 'testadmin',
+        'status'           => 1,
+        'role_id'          => 1,
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+        'password'         => '',
+        'current_password' => 'password',
+        'image'            => 'user/2/image.jpg',
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'name'  => 'testadmin',
+        'email' => 'update@example.com',
+        'image' => 'user/2/image.jpg',
+    ]);
+});
+
+it('should remove image if image is removed', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'update@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+        'image'        => 'user/2/image2.jpg',
+    ]);
+
+    $response = $this->put(route('admin.settings.users.update'), [
+        'id'               => $admin->id,
+        'email'            => 'update@example.com',
+        'name'             => 'testadmin',
+        'status'           => 1,
+        'role_id'          => 1,
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+        'password'         => '',
+        'current_password' => 'password',
+    ]);
+
+    $response->assertStatus(200);
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'name'  => 'testadmin',
+        'email' => 'update@example.com',
+        'image' => null,
+    ]);
+});
+
+it('should delete the user', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'delete@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+    ]);
+
+    $response = $this->delete(route('admin.settings.users.delete', ['id' => $admin->id]));
+    $response->assertStatus(200);
+
+    $this->assertDatabaseMissing($this->getFullTableName(Admin::class), [
+        'id' => $admin->id,
+    ]);
+});
+
+it('should not store the admin with invalid data', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->post(route('admin.settings.users.store'), [
+        'name'                  => 'as',
+        'email'                 => 'amg',
+        'password'              => '123',
+        'status'                => 1,
+        'role_id'               => 1,
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+        'password_confirmation' => '1234',
+    ]);
+
+    $response->assertSessionHasErrors([
+        'email',
+        'password_confirmation',
+    ]);
+});
+
+it('should not update the admin with invalid data', function () {
+    $this->loginAsAdmin();
+
+    $admin = Admin::factory()->create([
+        'email'        => 'update@example.com',
+        'password'     => Hash::make('password'),
+        'ui_locale_id' => 2,
+    ]);
+
+    $response = $this->put(route('admin.settings.users.update'), [
+        'id'                    => $admin->id,
+        'email'                 => 'invalid-email',
+        'name'                  => '',
+        'status'                => 1,
+        'role_id'               => 1,
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+        'password_confirmation' => 'aa',
+    ]);
+
+    $response->assertSessionHasErrors([
+        'email',
+        'name',
+        'password_confirmation',
+    ]);
+});
+
+it('should not delete the logged in user', function () {
+    $user = $this->loginAsAdmin();
+
+    $response = $this->delete(route('admin.settings.users.delete', ['id' => $user->id]));
+
+    $response->assertStatus(400);
+});
+
+it('should returns the users account page', function () {
+    $this->loginAsAdmin();
+
+    get(route('admin.account.edit'))
+        ->assertStatus(200)
+        ->assertSeeText(trans('admin::app.account.edit.title'));
+});
+
+it('should give validation errors when updating the user', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), []);
+
+    $response->assertStatus(302);
+    $response->assertSessionHasErrors([
+        'name',
+    ]);
+    $response->assertSessionDoesntHaveErrors([
+        'timezone',
+        'ui_locale_id',
+    ]);
+});
+
+it('should not update the user with invalid email', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'             => 'John',
+        'email'            => 'invalid-email',
+        'current_password' => 'password',
+        'password'         => '',
+        'image'            => '',
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+    ]);
+
+    $response->assertStatus(302);
+    $response->assertSessionHasErrors([
+        'email',
+    ]);
+});
+
+it('should not update the user without name', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'             => '',
+        'email'            => 'update@example.com',
+        'current_password' => 'password',
+        'password'         => '',
+        'image'            => '',
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => 2,
+    ]);
+
+    $response->assertStatus(302);
+    $response->assertSessionHasErrors([
+        'name',
+    ]);
+});
+
+it('should not change the password without the current password', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'                  => 'John',
+        'email'                 => 'update@example.com',
+        'current_password'      => '',
+        'password'              => 'password2',
+        'password_confirmation' => 'password2',
+        'image'                 => '',
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+    ]);
+
+    $response->assertStatus(302);
+    $response->assertSessionHasErrors([
+        'current_password',
+    ]);
+});
+
+it('should keep the current ui-locale when the field is cleared', function () {
+    $admin = $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'             => 'John',
+        'email'            => 'update@example.com',
+        'current_password' => 'password',
+        'password'         => '',
+        'image'            => '',
+        'timezone'         => 'Asia/Kolkata',
+        'ui_locale_id'     => '',
+    ]);
+
+    $response->assertOk();
+    $response->assertSessionDoesntHaveErrors(['ui_locale_id']);
+
+    expect($admin->fresh()->ui_locale_id)->toBe($admin->ui_locale_id);
+});
+
+it('should keep the current timezone when the field is cleared', function () {
+    $admin = $this->loginAsAdmin();
+
+    $admin->update(['timezone' => 'Asia/Kolkata']);
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'             => 'John',
+        'email'            => 'update@example.com',
+        'current_password' => 'password',
+        'password'         => '',
+        'image'            => '',
+        'timezone'         => '',
+        'ui_locale_id'     => 2,
+    ]);
+
+    $response->assertOk();
+    $response->assertSessionDoesntHaveErrors(['timezone']);
+
+    expect($admin->fresh()->timezone)->toBe('Asia/Kolkata');
+});
+
+it('should update the user with all required data', function () {
+    $this->loginAsAdmin();
+
+    $response = $this->put(route('admin.account.update'), [
+        'name'                  => 'John doe',
+        'email'                 => 'new@example.com',
+        'current_password'      => 'password',
+        'password'              => 'password2',
+        'image'                 => '',
+        'timezone'              => 'Asia/Kolkata',
+        'ui_locale_id'          => 2,
+        'password_confirmation' => 'password2',
+    ]);
+
+    $response->assertOk()->assertJsonPath('redirect_url', route('admin.account.edit'));
+
+    $this->assertDatabaseHas($this->getFullTableName(Admin::class), [
+        'name'  => 'John doe',
+        'email' => 'new@example.com',
+    ]);
+});
