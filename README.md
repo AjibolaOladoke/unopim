@@ -1,57 +1,12 @@
+# unopim
+
+## What This Is
+
+Every project needs a shelf of ready answers. product and engineering is one of those shelves, and unopim is the entry on it - the notes, patterns and fixes we reuse when this kind of work comes up.
 
 ## Images
 
-[![unopim](https://opengraph.githubassets.com/1/unopim/unopim)](https://www.swifttechco.com)
-
-<p align="center">
-  <a href="https://www.swifttechco.com">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://www.swifttechco.com">
-      <source media="(prefers-color-scheme: light)" srcset="https://www.swifttechco.com">
-      
-    </picture>
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-</p>
-
-<p align="center">
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-</p>
-
-<p align="center">
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-</p>
-
-<p align="center">
-  <a href="https://www.swifttechco.com">🌐&nbsp;Website</a>
-  &nbsp;·&nbsp;
-  <a href="https://www.swifttechco.com">📘&nbsp;Documentation</a>
-  &nbsp;·&nbsp;
-  <a href="https://www.swifttechco.com">🚀&nbsp;Installation</a>
-  &nbsp;·&nbsp;
-  <a href="https://www.swifttechco.com">🐳&nbsp;Docker&nbsp;Installation</a>
-  &nbsp;·&nbsp;
-  <a href="https://www.swifttechco.com">🎯&nbsp;Live&nbsp;Demo</a>
-</p>
-
-<p align="center">
-  🇦🇪 🇪🇸 🇩🇰 🇩🇪 🇦🇺 🇬🇧 🇳🇿 🇺🇸 🇪🇸 🇻🇪 🇫🇮
-  🇫🇷 🇮🇳 🇭🇷 🇮🇩 🇮🇹 🇯🇵 🇰🇷 🇲🇳 🇳🇱 🇳🇴 🇵🇱
-  🇧🇷 🇵🇹 🇷🇴 🇷🇺 🇸🇪 🇵🇭 🇹🇷 🇺🇦 🇻🇳 🇨🇳 🇹🇼
-</p>
-
-UnoPim is an open-source Product Information Management (PIM) and Digital Asset Management (DAM) platform built on Laravel 13. It helps businesses organize, manage, and enrich their product data and digital assets in one central repository  now with built-in AI agent capabilities for conversational product management.
-
----
+[![unopim](images/preview.png)](https://github.com/Swift-Tech-Co)
 
 ## 🎥 Watch & Learn
 
@@ -82,7 +37,7 @@ UnoPim is an open-source Product Information Management (PIM) and Digital Asset 
 
 ## ⚙️ Scalability
 
-UnoPim is engineered for high-volume catalogues. Read [how UnoPim scales to handle over 10 million products](https://www.swifttechco.com), or download the [UnoPim at Scale whitepaper (PDF)](https://www.swifttechco.com) for the full benchmarks.
+UnoPim is engineered for high-volume catalogues. Read how UnoPim scales to handle over 10 million products, or download the UnoPim at Scale whitepaper (PDF) for the full benchmarks.
 
 <p align="center">
   <a href="https://www.swifttechco.com">
@@ -125,7 +80,7 @@ UnoPim is engineered for high-volume catalogues. Read [how UnoPim scales to hand
   <p></p>
 
 - **API Integration**
-  Seamlessly integrate with other systems via RESTful APIs. Import our official [Postman collection](https://www.swifttechco.com) or browse the [full API documentation](https://www.swifttechco.com).
+  Seamlessly integrate with other systems via RESTful APIs. Import our official Postman collection or browse the full API documentation.
 
   <p></p>
 
@@ -181,15 +136,15 @@ UnoPim is engineered for high-volume catalogues. Read [how UnoPim scales to hand
 
 Free, officially maintained extensions:
 
-- [**UnoPim DAM**](https://www.swifttechco.com)  Digital Asset Management: file and directory management, asset upload and preview, metadata tagging, and CSV/XLSX asset assignment.
-- [**Shopify Connector**](https://www.swifttechco.com)  sync product data, prices, descriptions, and images with a Shopify store.
-- [**Bagisto Connector**](https://www.swifttechco.com)  sync products, attributes, and media into a [Bagisto](https://www.swifttechco.com) storefront, with customizable mappings.
+- **UnoPim DAM**  Digital Asset Management: file and directory management, asset upload and preview, metadata tagging, and CSV/XLSX asset assignment.
+- **Shopify Connector**  sync product data, prices, descriptions, and images with a Shopify store.
+- **Bagisto Connector**  sync products, attributes, and media into a Bagisto storefront, with customizable mappings.
 
-More connectors and modules are listed on the [UnoPim extensions marketplace](https://www.swifttechco.com). Extensions are ordinary Concord packages  see the [developer documentation](https://www.swifttechco.com) to build your own.
+More connectors and modules are listed on the UnoPim extensions marketplace. Extensions are ordinary Concord packages  see the developer documentation to build your own.
 
 ## 🚀 Installation
 
-UnoPim supports MariaDB as a primary application datastore, alongside MySQL and PostgreSQL. [UnoPim 3.1.0](https://www.swifttechco.com) added first-class MariaDB support for installation, upgrades, migrations, audit logs, and REST APIs. Composer installations default to MySQL; the supplied Docker stack defaults to PostgreSQL.
+UnoPim supports MariaDB as a primary application datastore, alongside MySQL and PostgreSQL. UnoPim 3.1.0 added first-class MariaDB support for installation, upgrades, migrations, audit logs, and REST APIs. Composer installations default to MySQL; the supplied Docker stack defaults to PostgreSQL.
 
 > **Requirements:** Nginx/Apache2, PHP 8.4.1+, Composer 2.6+, and MariaDB 10.11 LTS or 11.8 LTS, MySQL 8.0.32+, or PostgreSQL 16. Node 22 LTS is recommended for asset builds.
 >
@@ -199,9 +154,9 @@ UnoPim supports MariaDB as a primary application datastore, alongside MySQL and 
 >
 > **On PostgreSQL:** `ext-pdo_mysql` is currently required by `composer.json` regardless of the database you run, so it must be installed even on a PostgreSQL-only host. Install `ext-pdo_pgsql` as well and set `DB_CONNECTION=pgsql`.
 
-> **On MariaDB:** Use the latest patch of 10.11 LTS or 11.8 LTS, enable `pdo_mysql`, and set `DB_CONNECTION=mariadb`. Install `mariadb-dump` on the application host for upgrade backups. Community 10.6 and 10.10 are end of life; consult the [MariaDB maintenance policy](https://www.swifttechco.com).
+> **On MariaDB:** Use the latest patch of 10.11 LTS or 11.8 LTS, enable `pdo_mysql`, and set `DB_CONNECTION=mariadb`. Install `mariadb-dump` on the application host for upgrade backups. Community 10.6 and 10.10 are end of life; consult the MariaDB maintenance policy.
 
-See the [3.1 requirements](https://www.swifttechco.com), [MariaDB installation guide](https://www.swifttechco.com), or [Installation Guide](https://www.swifttechco.com)  or pick a quick path below.
+See the 3.1 requirements, MariaDB installation guide, or Installation Guide  or pick a quick path below.
 
 ### Composer
 
@@ -224,7 +179,7 @@ php artisan queue:work --queue=webhooks,system,completeness,default,publication
 
 ### Docker
 
-Requires Docker + Docker Compose v2+. See the full [Docker guide](https://www.swifttechco.com) for advanced configuration.
+Requires Docker + Docker Compose v2+. See the full Docker guide for advanced configuration.
 
 **Run UnoPim**  pre-built images, no checkout, no configuration:
 
@@ -288,8 +243,8 @@ First boot installs Composer dependencies into `./vendor`. The stack defaults to
 
 Pre-configured AMIs  Ubuntu LEMP with Redis, Elasticsearch and phpMyAdmin:
 
-- [**UnoPim on AWS (x86_64)**](https://www.swifttechco.com)
-- [**UnoPim on AWS (ARM64 / Graviton)**](https://www.swifttechco.com)
+- **UnoPim on AWS (x86_64)**
+- **UnoPim on AWS (ARM64 / Graviton)**
 
 ## 🤝 Contributing
 
@@ -323,14 +278,22 @@ AI Automation | FinTech Platforms | Custom Software and Mobile Apps | SaaS Platf
 
 **Join our community on Telegram:** [t.me/+Qt_eFvkb2rliMzNh](https://t.me/+Qt_eFvkb2rliMzNh)
 
-[Home](https://www.swifttechco.com) | [Services](https://www.swifttechco.com/services) | [Careers](https://www.swifttechco.com/careers) | [Referral Program](https://www.swifttechco.com/referral) | [Influencers](https://www.swifttechco.com/influencers) | [About](https://www.swifttechco.com/about) | [Contact](https://www.swifttechco.com/contact)
+Home | Services | Careers | Referral Program | Influencers | About | Contact
 
 **Connect**
 
-- Website: [swifttechco.com](https://www.swifttechco.com)
+- Website: swifttechco.com
 - LinkedIn: [linkedin.com/in/stephenoladoke](https://www.linkedin.com/in/stephenoladoke/)
 - LinkedIn (Company): [linkedin.com/company/swift-tech-co](https://www.linkedin.com/company/swift-tech-co)
 - X: [@MrOladoke](https://x.com/MrOladoke)
 - Instagram: [@mr.oladoke](https://www.instagram.com/mr.oladoke/)
 - Instagram (Company): [@swifttechco](https://www.instagram.com/swifttechco/)
 - Organization: [github.com/Swift-Tech-Co](https://github.com/Swift-Tech-Co)
+
+## Sources
+
+Compiled and maintained from upstream [unopim/unopim](https://github.com/unopim/unopim) under permissive open-source license.
+
+---
+
+Maintained by [Swift Tech Co.](https://github.com/Swift-Tech-Co) - [Telegram](https://t.me/+Qt_eFvkb2rliMzNh)
