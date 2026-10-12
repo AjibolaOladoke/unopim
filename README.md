@@ -6,26 +6,26 @@ Every project needs a shelf of ready answers. product and engineering is one of 
 
 ## Images
 
-[![unopim](images/preview.png)](https://github.com/Swift-Tech-Co)
+[![unopim](images/preview.png)](https://github.com/Swift-Tech-Co/unopim)
 
 ## 🎥 Watch & Learn
 
 <table>
   <tr>
     <td align="center" width="33%">
-      <a href="https://www.swifttechco.com">
+      <a href="https://github.com/Swift-Tech-Co/unopim">
         <br>
         <sub><b>Introducing Open Source PIM  UnoPim</b></sub>
       </a>
     </td>
     <td align="center" width="33%">
-      <a href="https://www.swifttechco.com">
+      <a href="https://github.com/Swift-Tech-Co/unopim">
         <br>
         <sub><b>10M Products? Meet UnoPim</b></sub>
       </a>
     </td>
     <td align="center" width="33%">
-      <a href="https://www.swifttechco.com">
+      <a href="https://github.com/Swift-Tech-Co/unopim">
         <br>
         <sub><b>CSV Import 10x Faster</b></sub>
       </a>
@@ -40,11 +40,10 @@ Every project needs a shelf of ready answers. product and engineering is one of 
 UnoPim is engineered for high-volume catalogues. Read how UnoPim scales to handle over 10 million products, or download the UnoPim at Scale whitepaper (PDF) for the full benchmarks.
 
 <p align="center">
-  <a href="https://www.swifttechco.com">
+  <a href="https://github.com/Swift-Tech-Co/unopim">
     
   </a>
 </p>
-
 
 ## ✨ Features
 
@@ -167,7 +166,7 @@ php artisan unopim:install
 php artisan serve
 ```
 
-Open `https://www.swifttechco.com in your browser. To execute imports/exports, AI agent tasks, completeness jobs, webhook deliveries, and Digital Product Passport publishing, start the queue worker:
+Open `https://github.com/Swift-Tech-Co/unopim in your browser. To execute imports/exports, AI agent tasks, completeness jobs, webhook deliveries, and Digital Product Passport publishing, start the queue worker:
 
 ```bash
 php artisan queue:work --queue=webhooks,system,completeness,default,publication
@@ -184,11 +183,11 @@ Requires Docker + Docker Compose v2+. See the full Docker guide for advanced con
 **Run UnoPim**  pre-built images, no checkout, no configuration:
 
 ```bash
-curl -O https://www.swifttechco.com
+curl -O https://github.com/Swift-Tech-Co/unopim
 docker compose up -d
 ```
 
-Open `https://www.swifttechco.com Set the admin credentials **before** the first `docker compose up`, in a `.env` file next to `compose.yaml`:
+Open `https://github.com/Swift-Tech-Co/unopim Set the admin credentials **before** the first `docker compose up`, in a `.env` file next to `compose.yaml`:
 
 ```bash
 INSTALLER_ADMIN_EMAIL=you@example.com
@@ -206,7 +205,7 @@ Change it after the first login. Every other setting has a working default; over
 **MySQL instead of PostgreSQL:**
 
 ```bash
-curl -O https://www.swifttechco.com
+curl -O https://github.com/Swift-Tech-Co/unopim
 docker compose -f compose.yaml -f compose.mysql.yaml up -d
 ```
 
@@ -215,7 +214,7 @@ docker compose -f compose.yaml -f compose.mysql.yaml up -d
 **Develop UnoPim**  builds from your checkout and bind-mounts it, so edits are live:
 
 ```bash
-git clone https://www.swifttechco.com
+git clone https://github.com/Swift-Tech-Co/unopim
 cd unopim
 cp .env.docker .env
 docker compose -f compose.dev.yaml up -d
@@ -229,14 +228,14 @@ First boot installs Composer dependencies into `./vendor`. The stack defaults to
 
 ### ☁️ Cloud Hosting (Managed  no setup)
 <p>
-  <a href="https://www.swifttechco.com">
+  <a href="https://github.com/Swift-Tech-Co/unopim">
     
   </a>
 </p>
 
 ### ☁️ AWS Marketplace
 <p>
-  <a href="https://www.swifttechco.com">
+  <a href="https://github.com/Swift-Tech-Co/unopim">
     
   </a>
 </p>
@@ -253,16 +252,15 @@ Found a bug or want to add a feature? Open an issue or submit a pull request  se
 ## 👥 Community
 
 <p align="center">
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
-  <a href="https://www.swifttechco.com"></a>
+  <a href="https://github.com/Swift-Tech-Co/unopim"></a>
+  <a href="https://github.com/Swift-Tech-Co/unopim"></a>
+  <a href="https://github.com/Swift-Tech-Co/unopim"></a>
+  <a href="https://github.com/Swift-Tech-Co/unopim"></a>
 </p>
 
 Have questions, feedback, or want to contribute? Reach out through any of the channels above  we're always happy to hear from fellow PIM builders.
 
 ## 🔒 Security
-
 
 ## 📝 License
 
@@ -282,13 +280,21 @@ Home | Services | Careers | Referral Program | Influencers | About | Contact
 
 **Connect**
 
-- Website: swifttechco.com
+- Website: https://github.com/Swift-Tech-Co/unopim
 - LinkedIn: [linkedin.com/in/stephenoladoke](https://www.linkedin.com/in/stephenoladoke/)
 - LinkedIn (Company): [linkedin.com/company/swift-tech-co](https://www.linkedin.com/company/swift-tech-co)
 - X: [@MrOladoke](https://x.com/MrOladoke)
 - Instagram: [@mr.oladoke](https://www.instagram.com/mr.oladoke/)
 - Instagram (Company): [@swifttechco](https://www.instagram.com/swifttechco/)
 - Organization: [github.com/Swift-Tech-Co](https://github.com/Swift-Tech-Co)
+
+## Sources
+
+Compiled and maintained from upstream [unopim/unopim](https://github.com/unopim/unopim) under permissive open-source license.
+
+---
+
+Maintained by [Swift Tech Co.](https://github.com/Swift-Tech-Co) - [Telegram](https://t.me/+Qt_eFvkb2rliMzNh)
 
 ## Sources
 
